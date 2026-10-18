@@ -1,0 +1,25 @@
+[package]
+name = "ironrdp-web-dirty-region-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Keep benchmark-only dependencies and exports outside the production workspace/API.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ironrdp = { path = "../../../ironrdp", features = ["session", "graphics"] }
+ironrdp-core = { path = "../../../ironrdp-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+anyhow = "1"
+wasm-bindgen = "=0.2.126"
+web-sys = { version = "=0.3.103", features = ["CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData"] }
+
+# Match the web client's production-wasm profile.
+[profile.release]
+opt-level = "s"
+lto = true
