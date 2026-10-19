@@ -1,0 +1,59 @@
+{
+  "baseline": "a5682c165cd81824fae397e976cb2e846d3ef0f4",
+  "baseline_revision": "a5682c165cd81824fae397e976cb2e846d3ef0f4",
+  "mode": "direct",
+  "comparison_baseline": "baseline",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+  "wasm_bindgen": "wasm-bindgen 0.2.126",
+  "rustflags": "-Ctarget-feature=+simd128,+bulk-memory --cfg getrandom_backend=\"wasm_js\" -Copt-level=s -Ccodegen-units=1 -Cllvm-args=-enable-dfa-jump-thread",
+  "profile": "release: opt-level=s, lto=true; no wasm-opt",
+  "harness_sha256": {
+    "Cargo.toml": "e97763dc49fb511fb63ea67e9d51a51eb96870e1e18011ccdd780f1f9301b823",
+    "Cargo.lock": "50a2bf709c1d494f1ef583b5958a1e878f2dbb4bb9a072c2cbf83da634869780",
+    "build.rs": "47233598aad974766a3c4d59f191570c0871423240a5d4051af9af96aafff8eb",
+    "policy.rs": "746f0a0e37a9165c03f4908d3c1ec6aa39c40caf5a3e66156ce98b2d3b319d5b",
+    "src/lib.rs": "e3ae3d90c39a2359177996b79aaa0e8aa0cf8dd72cf3f1ea350f5f1d16789b2d",
+    "src/presentation.rs": "9128413aa985a62175638a924e5c53dc8c8896c0d7fae57fb336ab4f2a0a67ef",
+    "presentation/build.py": "0022f8baabcee6e819c3888b36999188ac9ba927cc0b1c4e02652add2a9349da"
+  },
+  "variants": {
+    "baseline": {
+      "production_sources": {
+        "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+        "canvas.rs": "9c1a2c70268eae78b471f80a07adda2b42610b669ce0fff03d60aef01352d83e"
+      },
+      "sources": {
+        "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+        "canvas.rs": "9c1a2c70268eae78b471f80a07adda2b42610b669ce0fff03d60aef01352d83e"
+      },
+      "artifacts": {
+        "ironrdp_web_dirty_region_bench.d.ts": "7ee1bf72cc823fe6bba5f04bd17b06ec953d7b515fc1f1965f090e7899dc069a",
+        "ironrdp_web_dirty_region_bench.js": "787568cc119b1198240cdfe1d1cdada18e9b6fbda04f491e7ece2121e7bba790",
+        "ironrdp_web_dirty_region_bench_bg.wasm": "ed0f068161afbc4ccf5526731a18193f3b5d04aae4962724f432c6e866aab6f0",
+        "ironrdp_web_dirty_region_bench_bg.wasm.d.ts": "4953d414425fce68770c0243dd00e1a450fee6f20d0f900d9861fdcbca5f7d3e"
+      },
+      "patch_sha256": null,
+      "adapter_sha256": null,
+      "source_origin": "a5682c165cd81824fae397e976cb2e846d3ef0f4"
+    },
+    "candidate": {
+      "production_sources": {
+        "image.rs": "54b5afaf80c666a3c6f168e80f2453ffbc7d690ac295e621e48614e19bb40f3b",
+        "canvas.rs": "1aa18797d173385f975996dccd737ad74a0072a464b6ef8ecf30d6e73c9fda59"
+      },
+      "sources": {
+        "image.rs": "54b5afaf80c666a3c6f168e80f2453ffbc7d690ac295e621e48614e19bb40f3b",
+        "canvas.rs": "1aa18797d173385f975996dccd737ad74a0072a464b6ef8ecf30d6e73c9fda59"
+      },
+      "artifacts": {
+        "ironrdp_web_dirty_region_bench.d.ts": "7ee1bf72cc823fe6bba5f04bd17b06ec953d7b515fc1f1965f090e7899dc069a",
+        "ironrdp_web_dirty_region_bench.js": "787568cc119b1198240cdfe1d1cdada18e9b6fbda04f491e7ece2121e7bba790",
+        "ironrdp_web_dirty_region_bench_bg.wasm": "7b67fdd8745629fa73cd1fec4b2b200c46f6340e9f2a45c336b09e6ccd55384d",
+        "ironrdp_web_dirty_region_bench_bg.wasm.d.ts": "4953d414425fce68770c0243dd00e1a450fee6f20d0f900d9861fdcbca5f7d3e"
+      },
+      "patch_sha256": null,
+      "adapter_sha256": null,
+      "source_origin": "working tree"
+    }
+  }
+}

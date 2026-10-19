@@ -4,6 +4,8 @@ See [RESULTS.md](RESULTS.md) for the implementation comparison and the final
 full-screen confirmation using the repository's Rust 1.94.1.
 See [LARGE_COPY_RESULTS.md](LARGE_COPY_RESULTS.md) for the subsequent direct
 comparison of conditional full-width copy/alpha fusion against that SIMD baseline.
+See [EXPANDED_ROWS_RESULTS.md](EXPANDED_ROWS_RESULTS.md) for fusion applied after
+selecting the upload rectangle, compared directly with `a5682c16`.
 
 This experiment compares three independently compiled implementations:
 
@@ -120,6 +122,35 @@ SIMD alpha pass. These test RGB values, complete and incomplete pixels, surround
 bytes and unchanged source data. `prepare` in direct mode still measures raw
 extraction; it excludes the optimized presentation path and is not a selection
 metric. Select using complete `draw` and, for full frames, `draw_js` measurements.
+
+To isolate the expanded-row optimization, pass
+`--baseline a5682c165cd81824fae397e976cb2e846d3ef0f4` to the direct build command.
+The case matrix in [EXPANDED_ROWS_RESULTS.md](EXPANDED_ROWS_RESULTS.md) includes
+the 80% width boundary, selected uploads immediately below and above 256 KiB,
+odd framebuffer widths, and 4K. Previously optimized full frames and compact
+regions serve as controls. Do not combine improvement percentages measured
+against different baselines.
+
+## Current-source correctness in CI
+
+From the parent `dirty-region` directory, run:
+
+```sh
+python3 presentation/ci.py --expected-head "$(git rev-parse HEAD)" \
+    --wasm-bindgen /path/to/wasm-bindgen \
+    --output output/pixel-correctness
+```
+
+This requires a clean tracked checkout and a new output directory. It builds the
+current production files twice, with `simd128` explicitly disabled and enabled,
+and calls the real `Canvas::draw_image` and copy/alpha helpers in both modules.
+The build guard and the loaded modules must agree on `[false, true]` SIMD support.
+No historical revision or source adapter is used. It checks sparse initialization,
+resize, boundary cases and all RGBA bytes, without running performance timings.
+The report records the checked commit, source and artifact hashes, compiler,
+browser and observed feature flags. Use `--target-dir` for an isolated reusable
+cache, as for `build.py`. The Web pixel correctness workflow runs this command
+for the exact requested head commit and preserves the reports as CI artifacts.
 
 ## Measurements and controls
 
