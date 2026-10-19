@@ -46,6 +46,7 @@ use crate::clipboard::{ClipboardData, FileMetadata, WasmClipboard, WasmClipboard
 use crate::error::IronError;
 use crate::input::InputTransaction;
 use crate::network_client::WasmNetworkClient;
+use crate::presentation::PendingRegions;
 use crate::printer::{JsPrinterStreamCallbacks, WasmPrinter, WasmPrinterBackend, wasm_printer_pair};
 
 const DEFAULT_WIDTH: u16 = 1280;
@@ -610,6 +611,20 @@ pub(crate) struct Session {
     printer: RefCell<Option<Option<WasmPrinter>>>,
 }
 
+fn draw_pending(
+    gui: &Canvas,
+    image: &DecodedImage,
+    pending: &mut PendingRegions,
+    draw_buffer: &mut WriteBuf,
+) -> anyhow::Result<()> {
+    for region in pending.drain() {
+        let result = gui.draw_image(image, region, draw_buffer);
+        draw_buffer.clear();
+        result.context("draw updated region")?;
+    }
+    Ok(())
+}
+
 impl Session {
     fn h_send_inputs(&self, inputs: smallvec::SmallVec<[FastPathInputEvent; 2]>) -> Result<(), IronError> {
         if !inputs.is_empty() {
@@ -704,6 +719,7 @@ impl iron_remote_desktop::Session for Session {
 
         // Reused across frames so per-region extraction doesn't allocate on every draw.
         let mut draw_buffer = WriteBuf::new();
+        let mut pending_regions = PendingRegions::default();
 
         // We retain the factory to drive the Deactivation-Reactivation Sequence locally.
         let activation_factory = connection_result.activation_factory;
@@ -933,6 +949,11 @@ impl iron_remote_desktop::Session for Session {
             };
 
             for out in outputs {
+                // The PDU has already updated the framebuffer. Only coalesce adjacent draws,
+                // preserving the ordering of protocol responses, callbacks and lifecycle events.
+                if !matches!(out, ActiveStageOutput::GraphicsUpdate(_)) && !pending_regions.is_empty() {
+                    draw_pending(&gui, &image, &mut pending_regions, &mut draw_buffer)?;
+                }
                 match out {
                     ActiveStageOutput::ResponseFrame(frame) => {
                         self.writer_tx
@@ -940,9 +961,12 @@ impl iron_remote_desktop::Session for Session {
                             .context("Send frame to writer task")?;
                     }
                     ActiveStageOutput::GraphicsUpdate(region) => {
-                        gui.draw_image(&image, region, &mut draw_buffer)
-                            .context("draw updated region")?;
-                        draw_buffer.clear();
+                        if let Some(region) = pending_regions.push(region) {
+                            draw_pending(&gui, &image, &mut pending_regions, &mut draw_buffer)?;
+                            gui.draw_image(&image, region, &mut draw_buffer)
+                                .context("draw updated region")?;
+                            draw_buffer.clear();
+                        }
                     }
                     ActiveStageOutput::PointerDefault => {
                         self.set_cursor_style(CursorStyle::Default)?;
@@ -1130,6 +1154,7 @@ impl iron_remote_desktop::Session for Session {
                     ActiveStageOutput::Terminate(reason) => break 'outer reason,
                 }
             }
+            draw_pending(&gui, &image, &mut pending_regions, &mut draw_buffer)?;
         };
 
         info!(%disconnect_reason, "RDP session terminated");
