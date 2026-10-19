@@ -2,6 +2,8 @@
 
 See [RESULTS.md](RESULTS.md) for the implementation comparison and the final
 full-screen confirmation using the repository's Rust 1.94.1.
+See [LARGE_COPY_RESULTS.md](LARGE_COPY_RESULTS.md) for the subsequent direct
+comparison of conditional full-width copy/alpha fusion against that SIMD baseline.
 
 This experiment compares three independently compiled implementations:
 
@@ -9,6 +11,9 @@ This experiment compares three independently compiled implementations:
 - `simd`: the same extraction, followed by a SIMD alpha pass in `Canvas::draw`.
 - `fused`: copy pixels and normalize alpha in one SIMD pass during extraction;
   `Canvas::draw` then constructs `ImageData` and calls `putImageData`.
+
+These remain the default historical comparison. The `direct` build mode below
+instead compares the current SIMD baseline with the working-tree implementation.
 
 `build.py` reads the pinned baseline with `git show` and applies `simd.patch` or
 `fused.patch` to ignored source snapshots. It uses the application WASM flags,
@@ -48,9 +53,53 @@ Manifests are retained as captured. The final patch files use zero-context diffs
 to pass whitespace checks; applying them reproduces the recorded Rust 1.94.1
 candidate source hashes exactly.
 
+## Direct comparison against current SIMD
+
+Use a new output directory to compare the SIMD implementation at `289f710e` with
+the current working-tree `image.rs` and `canvas.rs`:
+
+```sh
+python3 presentation/build.py --mode direct --wasm-bindgen /path/to/wasm-bindgen \
+    --output output/presentation-direct
+python3 presentation/compare.py --chromium /path/to/chromium \
+    --build-dir output/presentation-direct \
+    --comparison candidate --comparison aa \
+    --case 1920x1080/1920x1080 --case 1920x1080/64x720 \
+    --case 1920x1080/32x32 --case 1920x1080/17x65 \
+    --output output/presentation-direct/measurements
+python3 presentation/summarize.py output/presentation-direct/measurements
+```
+
+The packages and reports call these implementations `baseline` and `candidate`;
+the baseline already includes SIMD alpha normalization. Each of four rounds runs
+candidate/baseline and baseline/baseline A/A in separate Chromium processes,
+with the same counterbalancing and timing controls as the historical experiment.
+`--comparison` is optional and repeatable: by default the runner compares every
+built candidate and A/A. `--case` remains repeatable, so small full-width strips,
+odd framebuffer widths, and sizes on either side of an implementation threshold
+can be added without changing the harness. Every selected case is also checked
+for RGBA equality and source immutability before measurement.
+
+Both direct builds call `Canvas::draw_image`. For the baseline only, the builder
+appends a benchmark adapter that calls its existing `extract_partial_image` and
+`Canvas::draw`. The candidate calls the real working-tree method. No runtime
+policy dispatch is added to either timed path. The manifest records production
+source hashes before adaptation, compiled source hashes, and the adapter hash.
+It still pins Rust 1.94.1, and `--baseline` can select a different compatible Git
+revision explicitly. Finish editing the candidate before building it; builds
+snapshot the source into the ignored output directory.
+
+The direct candidate's copy probe calls `canvas::copy_opaque_rgba` in actual WASM,
+independently varying source and destination offsets. Alpha probes call each
+build's real `make_opaque`. The baseline copy probe uses copy plus its existing
+SIMD alpha pass. These test RGB values, complete and incomplete pixels, surrounding
+bytes and unchanged source data. `prepare` in direct mode still measures raw
+extraction; it excludes the optimized presentation path and is not a selection
+metric. Select using complete `draw` and, for full frames, `draw_js` measurements.
+
 ## Measurements and controls
 
-The default run has four rounds, each containing scalar/SIMD, scalar/fused, and
+The historical default run has four rounds, each containing scalar/SIMD, scalar/fused, and
 scalar/scalar A/A sessions. Each session starts a fresh Chromium process.
 Module load order and mode order are independently counterbalanced across the
 four rounds; comparison and case order also rotate. A/A uses separate WASM
@@ -59,7 +108,7 @@ instances. It measures order and instance variability rather than a code change.
 
 Both variants share the same timing Canvas context. Each mode has at least
 400 ms of measured warmup per variant, then twelve alternating ABBA/BAAB blocks.
-Batch counts are even, calibrated on scalar to at least 16 ms, and reused across
+Batch counts are even, calibrated on the comparison baseline to at least 16 ms, and reused across
 variants and subsequent sessions. Animation-frame waits occur outside the timer.
 The variants alternate between two nonuniform framebuffers that differ only in
 the declared dirty region. Allocation and fixture creation occur before timing.

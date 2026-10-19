@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare scalar, SIMD alpha, and fused copy/alpha WASM builds in Chromium."""
+"""Compare independently compiled WASM variants and A/A controls in Chromium."""
 
 import argparse
 import asyncio
@@ -21,7 +21,6 @@ from playwright.async_api import async_playwright
 
 
 TIMEOUT_SECONDS = 120
-VARIANTS = ("scalar", "simd", "fused")
 DEFAULT_CASES = ("1920x1080/1920x1080", "1920x1080/64x720", "1920x1080/32x32", "1920x1080/17x65")
 
 
@@ -46,9 +45,11 @@ def parse_args():
     parser.add_argument("--output", type=Path, required=True, help="new result directory")
     parser.add_argument("--build-dir", type=Path, default=root / "output/simd-presentation-20261019")
     parser.add_argument("--chromium", help="optional Chromium executable path")
-    parser.add_argument("--rounds", type=int, default=4, help="each round runs scalar/SIMD, scalar/fused, and scalar/scalar")
+    parser.add_argument("--rounds", type=int, default=4, help="each round runs every selected comparison in a fresh browser")
+    parser.add_argument("--comparison", action="append",
+                        help="repeat candidate variant names or aa; default: all candidates and baseline/baseline")
     parser.add_argument("--samples", type=int, default=12, help="ABBA or BAAB blocks per case and mode")
-    parser.add_argument("--target-ms", type=float, default=16, help="scalar batch duration used for initial common calibration")
+    parser.add_argument("--target-ms", type=float, default=16, help="baseline batch duration used for initial common calibration")
     parser.add_argument("--warmup-ms", type=float, default=400, help="minimum measured warmup time per variant and mode")
     parser.add_argument("--seed", type=lambda value: int(value, 0), default=0x12345678)
     parser.add_argument("--case", action="append", help="repeat for selected image/dirty dimensions, e.g. 1920x1080/64x720")
@@ -61,12 +62,24 @@ def parse_args():
     args.build_dir = args.build_dir.resolve()
     if not args.build_dir.is_relative_to(root):
         parser.error("--build-dir must be inside the dirty-region benchmark directory")
-    for variant in VARIANTS:
+    manifest_path = args.build_dir / "build-manifest.json"
+    if not manifest_path.is_file():
+        parser.error("missing build-manifest.json")
+    manifest = json.loads(manifest_path.read_text())
+    args.baseline = manifest.get("comparison_baseline", "scalar")
+    mode = manifest.get("mode", "historical")
+    args.variants = ("baseline", "candidate") if mode == "direct" else ("scalar", "simd", "fused")
+    if (mode not in ("historical", "direct") or set(manifest.get("variants", {})) != set(args.variants)
+            or args.baseline != args.variants[0]):
+        parser.error("build manifest is incomplete or has unsupported variants/baseline")
+    available = [variant for variant in args.variants if variant != args.baseline] + ["aa"]
+    args.comparisons = args.comparison or available
+    if not set(args.comparisons) <= set(available) or len(set(args.comparisons)) != len(args.comparisons):
+        parser.error(f"comparisons must be unique choices from: {', '.join(available)}")
+    for variant in args.variants:
         for suffix in (".js", "_bg.wasm"):
             if not (args.build_dir / "pkg" / variant / f"ironrdp_web_dirty_region_bench{suffix}").is_file():
-                parser.error(f"missing {variant} WASM package; build the three variants first")
-    if not (args.build_dir / "build-manifest.json").is_file():
-        parser.error("missing build-manifest.json")
+                parser.error(f"missing {variant} WASM package; finish building the variants first")
     args.fixtures = []
     for name in args.case or DEFAULT_CASES:
         match = re.fullmatch(r"([0-9]+)x([0-9]+)/([0-9]+)x([0-9]+)", name)
@@ -106,7 +119,7 @@ async def session(playwright, args, url, package_root, plan, counts):
         await page.goto(url, wait_until="load")
         await page.wait_for_function("typeof window.prepare === 'function'")
         prepared = await evaluate(page, "options => window.prepare(options)",
-                                  {"pair": plan["pair"], "packageRoot": package_root})
+                                  {"pair": plan["pair"], "packageRoot": package_root, "baseline": args.baseline})
         if not prepared["cross_origin_isolated"]:
             raise RuntimeError("benchmark page is not cross-origin isolated")
         cdp = await browser.new_browser_cdp_session()
@@ -117,7 +130,8 @@ async def session(playwright, args, url, package_root, plan, counts):
                   "gl_renderer": gpu.get("auxAttributes", {}).get("glRenderer"), "prepared": prepared,
                   "host_before": host_snapshot()}
         if plan["kind"] == "correctness":
-            result["correctness"] = await evaluate(page, "() => window.checkCorrectness()")
+            result["correctness"] = await evaluate(page, "options => window.checkCorrectness(options)",
+                                                   {"extraFixtures": args.fixtures})
         else:
             measurements = []
             for fixture in plan["cases"]:
@@ -159,8 +173,8 @@ async def run(args):
                                      for name in ("compare.py", "compare.js", "index.html")},
                   "package_sha256": {variant: {suffix: hashlib.sha256(
                       (args.build_dir / "pkg" / variant / f"ironrdp_web_dirty_region_bench{suffix}").read_bytes()
-                  ).hexdigest() for suffix in (".js", "_bg.wasm")} for variant in VARIANTS}}
-    for variant in VARIANTS:
+                  ).hexdigest() for suffix in (".js", "_bg.wasm")} for variant in args.variants}}
+    for variant in args.variants:
         artifacts = provenance["build_manifest"].get("variants", {}).get(variant, {}).get("artifacts", {})
         for suffix, actual in provenance["package_sha256"][variant].items():
             filename = f"ironrdp_web_dirty_region_bench{suffix}"
@@ -168,30 +182,31 @@ async def run(args):
                 raise RuntimeError(f"{variant}/{filename} does not match the completed build manifest")
     schedule = []
     for round_index in range(args.rounds):
-        comparisons = ["simd", "fused", "aa"]
+        comparisons = args.comparisons[:]
         rotation = (args.seed + round_index) % len(comparisons)
         comparisons = comparisons[rotation:] + comparisons[:rotation]
         if (round_index // 3) % 2:
             comparisons.reverse()
         for comparison in comparisons:
-            comparison_index = ["simd", "fused", "aa"].index(comparison)
-            pair = ["scalar", "scalar" if comparison == "aa" else comparison]
+            comparison_index = args.comparisons.index(comparison)
+            pair = [args.baseline, args.baseline if comparison == "aa" else comparison]
             # Across four rounds, each pair order occurs with each mode order.
             if round_index % 2:
                 pair.reverse()
             rotation = (args.seed + round_index + comparison_index) % len(args.fixtures)
             fixtures = args.fixtures[rotation:] + args.fixtures[:rotation]
             schedule.append({"kind": "timing", "session": len(schedule) + 1, "round": round_index + 1,
-                             "comparison": comparison, "pair": pair, "cases": fixtures,
+                             "comparison": comparison, "baseline": args.baseline, "pair": pair, "cases": fixtures,
                              "reverse_modes": bool((round_index // 2 + comparison_index) % 2),
                              "block_order": (args.seed + round_index + comparison_index) % 2})
     experiment = {**provenance, "seed": args.seed, "samples": args.samples, "rounds": args.rounds,
                   "target_ms": args.target_ms, "warmup_ms": args.warmup_ms,
                   "include_prepare": args.include_prepare, "correctness_only": args.correctness_only,
+                  "comparison_baseline": args.baseline, "comparisons": args.comparisons,
                   "schedule": [] if args.correctness_only else schedule,
                   "notes": ["timings exclude compositor completion and RDP decoding",
-                            "prepare includes alpha only for fused and is not an equal-work comparison",
-                            "common even batch sizes are calibrated on scalar and reused across sessions"]}
+                            "historical fused prepare includes alpha; select implementations using complete draw work",
+                            f"common even batch sizes are calibrated on {args.baseline} and reused across sessions"]}
     write_json(args.output / "experiment.json", experiment)
 
     class Handler(http.server.SimpleHTTPRequestHandler):
@@ -219,7 +234,7 @@ async def run(args):
         counts = {}
         async with async_playwright() as playwright:
             correctness = await session(playwright, args, url, package_root,
-                                        {"kind": "correctness", "pair": list(VARIANTS)}, counts)
+                                        {"kind": "correctness", "pair": list(args.variants)}, counts)
             write_json(args.output / "correctness.json", correctness)
             print(f"wrote {args.output / 'correctness.json'}", flush=True)
             if not args.correctness_only:

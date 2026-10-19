@@ -26,14 +26,14 @@ T975 = (
 )
 CPU_FIELDS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
 METHOD = (
-    "Each session estimate is median(log(candidate/scalar)) across balanced blocks. "
+    "Each session estimate is median(log(candidate/baseline)) across balanced blocks. "
     "Each block time averages its two observations per slot. The aggregate is "
     "exp(mean(session log estimates)); its exploratory two-sided 95% t interval "
     "uses independent Chromium sessions, never individual batches. The default "
     "n=4 is small and does not establish equivalence or a reliable population interval."
 )
 AA_NOTE = (
-    "A/A is scalar slot 1 / scalar slot 0: separate instances of the identical build, "
+    "A/A is baseline slot 1 / baseline slot 0: separate instances of the identical build, "
     "loaded second / first. ABBA/BAAB timing order alternates; this is an instance/order "
     "control, not a code-change effect."
 )
@@ -83,40 +83,48 @@ def summarize_row(session, measurement, row, filename):
     plan = session["plan"]
     pair = measurement["pair"]
     comparison = plan["comparison"]
+    baseline = plan.get("baseline", "scalar")
     if pair != plan["pair"] or len(pair) != 2:
         raise ValueError(f"{filename}: inconsistent pair")
     if comparison == "aa":
-        if pair != ["scalar", "scalar"]:
-            raise ValueError(f"{filename}: A/A must use two scalar instances")
-        scalar_slot, candidate_slot = 0, 1
-    elif comparison in ("simd", "fused") and sorted(pair) == sorted(["scalar", comparison]):
-        scalar_slot, candidate_slot = pair.index("scalar"), pair.index(comparison)
+        if pair != [baseline, baseline]:
+            raise ValueError(f"{filename}: A/A must use two baseline instances")
+        baseline_slot, candidate_slot = 0, 1
+    elif comparison != baseline and sorted(pair) == sorted([baseline, comparison]):
+        baseline_slot, candidate_slot = pair.index(baseline), pair.index(comparison)
     else:
         raise ValueError(f"{filename}: unsupported comparison/pair {comparison}/{pair}")
     logs = []
     for block in row["blocks"]:
         times = [positive(block[key], f"{filename} block {key}") for key in ("a_us", "b_us")]
-        logs.append(math.log(times[candidate_slot]) - math.log(times[scalar_slot]))
+        logs.append(math.log(times[candidate_slot]) - math.log(times[baseline_slot]))
     if not logs:
         raise ValueError(f"{filename}: no timing blocks")
     medians = [statistics.median(positive(value, f"{filename} sample")
                                  for value in row[key]["samples_us"]) for key in ("a", "b")]
     estimate = statistics.median(logs)
     window = host_window(measurement["host_before"], measurement["host_after"])
-    return {
+    result = {
         "file": filename, "session": plan["session"], "round": plan["round"],
-        "pair": pair, "scalar_slot": scalar_slot, "candidate_slot": candidate_slot,
+        "pair": pair, "baseline": baseline, "baseline_slot": baseline_slot, "candidate_slot": candidate_slot,
         "initial_block_order": measurement["initial_block_order"],
         "mode_order": measurement["mode_order"], "iterations": row["iterations"],
         "blocks": len(logs), "log_ratio_estimate": estimate,
         "ratio": math.exp(estimate), "change_percent": 100 * math.expm1(estimate),
-        "scalar_median_us": medians[scalar_slot], "candidate_median_us": medians[candidate_slot],
+        "baseline_median_us": medians[baseline_slot], "candidate_median_us": medians[candidate_slot],
         "host": host_summary([window]), "host_window": window,
     }
+    if baseline == "scalar":
+        # Keep historical result consumers compatible without mislabeling direct SIMD runs.
+        result.update(scalar_slot=baseline_slot, scalar_median_us=medians[baseline_slot])
+    return result
 
 
 def aggregate(key, rows):
     comparison, mode, case = key
+    baseline = rows[0]["baseline"]
+    if any(row["baseline"] != baseline for row in rows):
+        raise ValueError(f"{key}: cannot pool different baselines")
     logs = [row["log_ratio_estimate"] for row in rows]
     estimate = statistics.mean(logs)
     count = len(logs)
@@ -130,17 +138,21 @@ def aggregate(key, rows):
                     "change_percent": [100 * math.expm1(estimate - margin), 100 * math.expm1(estimate + margin)],
                     "degrees_of_freedom": degrees, "critical_value_df": critical_degrees,
                     "critical_value": T975[critical_degrees - 1], "exploratory": True}
-    return {
+    result = {
         "comparison": comparison, "mode": mode, "case": case, "n_sessions": count,
-        "ratio_meaning": "scalar slot 1 / scalar slot 0" if comparison == "aa" else f"{comparison} / scalar",
+        "baseline": baseline,
+        "ratio_meaning": f"{baseline} slot 1 / {baseline} slot 0" if comparison == "aa" else f"{comparison} / {baseline}",
         "equal_work": not (comparison == "fused" and mode == "prepare"),
         "ratio": math.exp(estimate), "change_percent": 100 * math.expm1(estimate),
         "exploratory_ci95": interval,
-        "scalar_median_us": statistics.median(row["scalar_median_us"] for row in rows),
+        "baseline_median_us": statistics.median(row["baseline_median_us"] for row in rows),
         "candidate_median_us": statistics.median(row["candidate_median_us"] for row in rows),
         "host": host_summary([row["host_window"] for row in rows]),
         "sessions": [{name: value for name, value in row.items() if name != "host_window"} for row in rows],
     }
+    if baseline == "scalar":
+        result["scalar_median_us"] = result["baseline_median_us"]
+    return result
 
 
 def summarize(directory):
@@ -187,9 +199,9 @@ def summarize(directory):
         warnings.append(f"Observed independent session counts per group: {counts}; default design uses 4.")
     if any(row["host"]["valid_cpu_windows"] != row["n_sessions"] for row in results):
         warnings.append("Some CPU counter windows were invalid; they were excluded from utilization estimates.")
-    return {"schema_version": 1, "method": METHOD, "aa_note": AA_NOTE, "host_note": HOST_NOTE,
+    return {"schema_version": 2, "method": METHOD, "aa_note": AA_NOTE, "host_note": HOST_NOTE,
             "absolute_time_method": "median of independent session raw-sample medians; not the paired-ratio estimator",
-            "prepare_note": "prepare includes alpha only in fused; scalar/fused prepare is unequal work",
+            "prepare_note": "prepare is raw extraction, except historical fused also includes alpha; select using draw",
             "timing_scope": "synchronous submission; excludes compositor completion and RDP decoding",
             "input_sha256": input_hashes, "n_sessions": len(sessions),
             "planned_sessions": expected_sessions, "warnings": warnings,
@@ -199,15 +211,15 @@ def summarize(directory):
 def text_summary(result):
     lines = [METHOD, AA_NOTE, HOST_NOTE,
              "Times below: medians of session medians. Ratios below 1 mean candidate is faster.",
-             "prepare includes alpha only for fused; do not compare it as equal work."]
+             "prepare includes alpha only for historical fused; select implementations using complete draw work."]
     lines.extend(f"WARNING: {warning}" for warning in result["warnings"])
-    lines.append("comparison mode case n scalar_us candidate_us ratio change% exploratory_95%_change per_session_ratios")
+    lines.append("comparison mode case n baseline_us candidate_us ratio change% exploratory_95%_change per_session_ratios")
     for row in result["results"]:
         interval = row["exploratory_ci95"]
         bounds = "unavailable" if interval is None else "/".join(f"{value:+.2f}%" for value in interval["change_percent"])
         ratios = ",".join(f"{session['ratio']:.4f}" for session in row["sessions"])
         lines.append(f"{row['comparison']} {row['mode']} {row['case']} {row['n_sessions']} "
-                     f"{row['scalar_median_us']:.3f} {row['candidate_median_us']:.3f} {row['ratio']:.4f} "
+                     f"{row['baseline_median_us']:.3f} {row['candidate_median_us']:.3f} {row['ratio']:.4f} "
                      f"{row['change_percent']:+.2f}% [{bounds}] {ratios}")
     host = result["host"]
     busy = "unavailable" if host["busy_percent"] is None else f"{host['busy_percent']:.1f}%"
@@ -217,8 +229,9 @@ def text_summary(result):
 
 
 def write_csv(path, results):
+    baseline_field = "scalar_median_us" if all(row["baseline"] == "scalar" for row in results) else "baseline_median_us"
     fields = ["comparison", "mode", "case", "n_sessions", "equal_work", "ratio", "change_percent",
-              "exploratory_ci95_low_percent", "exploratory_ci95_high_percent", "scalar_median_us",
+              "exploratory_ci95_low_percent", "exploratory_ci95_high_percent", baseline_field,
               "candidate_median_us", "host_cpu_busy_percent", "host_cpu_steal_percent",
               "host_load_1m_min", "host_load_1m_max", "session_ratios"]
     with path.open("w", newline="", encoding="utf-8") as output:

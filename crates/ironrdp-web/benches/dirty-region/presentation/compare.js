@@ -30,20 +30,21 @@ function summary(values) {
 }
 
 window.prepare = async ({pair = ["scalar", "simd", "fused"],
-    packageRoot = "../output/simd-presentation-20261019/pkg"} = {}) => {
+    packageRoot = "../output/simd-presentation-20261019/pkg", baseline = "scalar"} = {}) => {
     if (current) throw new Error("use a fresh page for each preparation");
-    if (pair.some(name => !["scalar", "simd", "fused"].includes(name))) {
+    if (pair.some(name => !["scalar", "simd", "fused", "baseline", "candidate"].includes(name))) {
         throw new Error("unknown build variant");
     }
+    if (!pair.includes(baseline)) throw new Error("pair must include its calibration baseline");
     const modules = [];
     for (let index = 0; index < pair.length; index++) {
-        // Separate binding state and WASM memories, including scalar/scalar A/A.
+        // Separate binding state and WASM memories, including baseline/baseline A/A.
         const module = await import(`${packageRoot}/${pair[index]}/ironrdp_web_dirty_region_bench.js?instance=${index}`);
         await module.default();
         modules.push(module);
     }
-    current = {pair, modules};
-    return {pair, user_agent: navigator.userAgent, cross_origin_isolated: crossOriginIsolated,
+    current = {pair, modules, baseline};
+    return {pair, baseline, user_agent: navigator.userAgent, cross_origin_isolated: crossOriginIsolated,
         hardware_concurrency: navigator.hardwareConcurrency, performance_time_origin: performance.timeOrigin};
 };
 
@@ -83,7 +84,7 @@ function checkFixture(module, fixture, label) {
     }
 }
 
-window.checkCorrectness = () => {
+window.checkCorrectness = ({extraFixtures = []} = {}) => {
     const checks = [];
     const fixtures = [1, 2, 3, 4, 5, 7, 15, 16, 17].map(width => ({
         imageWidth: 96, imageHeight: 88, left: 13, top: 7, width, height: 65,
@@ -93,6 +94,12 @@ window.checkCorrectness = () => {
         {imageWidth: 1920, imageHeight: 1080, left: 0, top: 0, width: 1920, height: 1080},
         {imageWidth: 96, imageHeight: 88, left: 13, top: 9, width: 32, height: 32},
     );
+    const dimensions = ["imageWidth", "imageHeight", "left", "top", "width", "height"];
+    for (const extra of extraFixtures) {
+        if (!fixtures.some(existing => dimensions.every(key => existing[key] === extra[key]))) {
+            fixtures.push(extra);
+        }
+    }
     for (const fixture of fixtures) {
         let reference;
         current.modules.forEach((module, index) => {
@@ -211,19 +218,19 @@ window.measureCase = async ({fixture, samples = 12, targetMs = 16, warmupMs = 40
             }
             const calibration = [];
             if (!iterationsByMode[mode]) {
-                // Calibrate only scalar builds. Use one common even count for A/B;
+                // Calibrate only baseline builds. Use one common even count for A/B;
                 // Python also reuses this count across subsequent fresh sessions.
-                const scalarSlots = current.pair.map((name, index) => name === "scalar" ? index : -1)
+                const baselineSlots = current.pair.map((name, index) => name === current.baseline ? index : -1)
                     .filter(index => index !== -1);
-                if (!scalarSlots.length) throw new Error("calibration requires scalar baseline");
+                if (!baselineSlots.length) throw new Error("calibration requires the baseline");
                 for (;;) {
                     await frame();
-                    const elapsed = scalarSlots.map(variant => {
+                    const elapsed = baselineSlots.map(variant => {
                         const start = performance.now();
                         operation(variant, mode, iterations);
                         return performance.now() - start;
                     });
-                    calibration.push({iterations, scalar_slots: scalarSlots, elapsed_ms: elapsed});
+                    calibration.push({iterations, baseline_slots: baselineSlots, elapsed_ms: elapsed});
                     if (Math.max(...elapsed) >= targetMs || iterations >= 262144) break;
                     iterations *= 2;
                 }

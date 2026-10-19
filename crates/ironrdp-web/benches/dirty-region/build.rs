@@ -10,11 +10,16 @@ fn main() {
     ] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
-    for variant in ["simd", "fused"] {
+    let selected_variant = env::var("IRONRDP_BENCH_VARIANT");
+    for variant in ["simd", "fused", "candidate"] {
         println!("cargo:rustc-check-cfg=cfg(presentation_{variant})");
-        if env::var("IRONRDP_BENCH_VARIANT").as_deref() == Ok(variant) {
+        if selected_variant.as_deref() == Ok(variant) {
             println!("cargo:rustc-cfg=presentation_{variant}");
         }
+    }
+    println!("cargo:rustc-check-cfg=cfg(presentation_direct)");
+    if matches!(selected_variant.as_deref(), Ok("baseline" | "candidate")) {
+        println!("cargo:rustc-cfg=presentation_direct");
     }
     let source =
         env::var_os("IRONRDP_BENCH_IMAGE_SOURCE").map_or_else(|| PathBuf::from("../../src/image.rs"), PathBuf::from);

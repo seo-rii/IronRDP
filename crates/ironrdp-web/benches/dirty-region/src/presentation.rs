@@ -85,14 +85,25 @@ impl PresentationBenchmark {
         let region = rectangle(left, top, width, height);
         for iteration in 0..iterations {
             self.fixture.buffer.clear();
-            let selected = image::extract_partial_image(
-                black_box(&self.fixture.frames[(self.next_frame + iteration as usize) % 2]),
-                black_box(region.clone()),
-                &mut self.fixture.buffer,
-            );
+            #[cfg(presentation_direct)]
             self.canvas
-                .draw(self.fixture.buffer.filled_mut(), selected)
+                .draw_image(
+                    black_box(&self.fixture.frames[(self.next_frame + iteration as usize) % 2]),
+                    black_box(region.clone()),
+                    &mut self.fixture.buffer,
+                )
                 .map_err(|error| JsValue::from_str(&error.to_string()))?;
+            #[cfg(not(presentation_direct))]
+            {
+                let selected = image::extract_partial_image(
+                    black_box(&self.fixture.frames[(self.next_frame + iteration as usize) % 2]),
+                    black_box(region.clone()),
+                    &mut self.fixture.buffer,
+                );
+                self.canvas
+                    .draw(self.fixture.buffer.filled_mut(), selected)
+                    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+            }
         }
         self.next_frame = (self.next_frame + iterations as usize) % 2;
         Ok(self.fixture.buffer.filled_len())
@@ -114,9 +125,9 @@ impl PresentationBenchmark {
 #[wasm_bindgen]
 pub fn probe_alpha(mut bytes: Vec<u8>, offset: usize, len: usize) -> Vec<u8> {
     let buffer = &mut bytes[offset..offset + len];
-    #[cfg(presentation_simd)]
+    #[cfg(any(presentation_simd, presentation_direct))]
     super::canvas::make_opaque(buffer);
-    #[cfg(not(presentation_simd))]
+    #[cfg(not(any(presentation_simd, presentation_direct)))]
     for pixel in buffer.chunks_exact_mut(4) {
         pixel[3] = 255;
     }
@@ -136,9 +147,14 @@ pub fn probe_copy(
     let dst = &mut target[target_offset..target_offset + len];
     #[cfg(presentation_fused)]
     super::image::copy_opaque_rgba(src, dst);
-    #[cfg(not(presentation_fused))]
+    #[cfg(presentation_candidate)]
+    super::canvas::copy_opaque_rgba(src, dst);
+    #[cfg(not(any(presentation_fused, presentation_candidate)))]
     {
         dst.copy_from_slice(src);
+        #[cfg(presentation_direct)]
+        super::canvas::make_opaque(dst);
+        #[cfg(not(presentation_direct))]
         for pixel in dst.chunks_exact_mut(4) {
             pixel[3] = 255;
         }
