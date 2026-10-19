@@ -2,6 +2,10 @@
 
 Measured on 2026-10-18 UTC (2026-10-19 KST), based on `62246b36` plus this change.
 
+These are the original cap-only measurements, retained with their measured source
+hashes. The later independent-build comparison of pixel preparation is recorded
+in [presentation/RESULTS.md](presentation/RESULTS.md).
+
 The selected limit is **1.25x**: retain the existing height/width trigger, but widen only when the dirty region covers at least 80% of the image width. At 1920 pixels, the boundary is 1536 pixels. This bounds extra copying, alpha normalization, and Canvas upload to 25% while preserving contiguous copies for near-full and full-width updates.
 
 ## Environment and method

@@ -3,10 +3,13 @@
 This auxiliary crate measures the real Rust extraction helpers and the production
 `Canvas::draw` implementation without exporting benchmark APIs from `ironrdp-web`.
 `build.rs` copies `src/image.rs` unchanged into `OUT_DIR` and appends `policy.rs` in
-the same module so it can call the private helpers. The browser build imports
-`src/canvas.rs` directly. Source hashes accompany the browser results.
+the same module so it can call the private helpers. It also copies `src/canvas.rs`
+unchanged into `OUT_DIR`. Source hashes accompany the browser results.
 
 See [the measured results](RESULTS.md) for the cap comparison and regression checks.
+The [presentation comparison](presentation/README.md) separately compares scalar
+alpha normalization, SIMD alpha normalization, and fused SIMD copying/alpha
+normalization using independent WASM builds and interleaved A/A controls.
 
 The policies are the original height/width heuristic, expansion caps of 1.25x,
 1.5x and 2x, always exact, always whole rows, and the current production policy.

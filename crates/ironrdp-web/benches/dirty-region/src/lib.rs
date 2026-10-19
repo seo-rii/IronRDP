@@ -99,11 +99,10 @@ impl Fixture {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-#[path = "../../../src/canvas.rs"]
-mod canvas;
+#[cfg(all(target_arch = "wasm32", feature = "presentation"))]
+mod presentation;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "presentation")))]
 mod browser {
     use core::num::NonZeroU32;
 

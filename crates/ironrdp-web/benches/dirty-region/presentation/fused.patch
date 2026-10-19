@@ -1,0 +1,56 @@
+--- a/image.rs
++++ b/image.rs
+@@ -8,0 +9 @@
++/// Forces the copied RGBA pixels opaque without modifying the framebuffer.
+@@ -56 +57 @@
+-        target_slice.copy_from_slice(src_slice);
++        copy_opaque_rgba(src_slice, target_slice);
+@@ -80 +81 @@
+-    buffer.unfilled_to(len).copy_from_slice(&src[src_begin..src_end]);
++    copy_opaque_rgba(&src[src_begin..src_end], buffer.unfilled_to(len));
+@@ -89,0 +91,34 @@
++
++/// Copies RGBA bytes, forcing complete pixels opaque and preserving any incomplete trailing pixel.
++pub(crate) fn copy_opaque_rgba(src: &[u8], dst: &mut [u8]) {
++    assert_eq!(src.len(), dst.len());
++
++    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
++    let (src, dst) = {
++        use core::arch::wasm32::{u32x4_splat, v128_load, v128_or, v128_store};
++
++        let alpha = u32x4_splat(0xFF00_0000);
++        let mut src_chunks = src.chunks_exact(16);
++        let mut dst_chunks = dst.chunks_exact_mut(16);
++        for (source, target) in src_chunks.by_ref().zip(dst_chunks.by_ref()) {
++            #[expect(clippy::cast_ptr_alignment, reason = "WASM SIMD loads support unaligned pointers")]
++            let src_ptr = source.as_ptr().cast();
++            #[expect(clippy::cast_ptr_alignment, reason = "WASM SIMD stores support unaligned pointers")]
++            let dst_ptr = target.as_mut_ptr().cast();
++            // SAFETY: The source chunk contains 16 initialized bytes; v128_load supports unaligned pointers.
++            let pixels = unsafe { v128_load(src_ptr) };
++            let opaque = v128_or(pixels, alpha);
++            // SAFETY: The target chunk uniquely owns 16 bytes; v128_store supports unaligned pointers.
++            unsafe { v128_store(dst_ptr, opaque) };
++        }
++        (src_chunks.remainder(), dst_chunks.into_remainder())
++    };
++
++    let mut src_pixels = src.chunks_exact(4);
++    let mut dst_pixels = dst.chunks_exact_mut(4);
++    for (source, target) in src_pixels.by_ref().zip(dst_pixels.by_ref()) {
++        target.copy_from_slice(source);
++        target[3] = 0xFF;
++    }
++    dst_pixels.into_remainder().copy_from_slice(src_pixels.remainder());
++}
+--- a/canvas.rs
++++ b/canvas.rs
+@@ -39,2 +39 @@
+-    /// Blits a dirty region with `put_image_data`. Forces alpha opaque first: the framebuffer isn't
+-    /// guaranteed opaque (zero-init columns, QOI-RGBA) and `put_image_data` stores alpha verbatim.
++    /// Blits a dirty region with `put_image_data`; extraction has already forced its alpha opaque.
+@@ -42,4 +40,0 @@
+-        for pixel in buffer.chunks_exact_mut(4) {
+-            pixel[3] = 0xFF;
+-        }
+-

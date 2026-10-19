@@ -10,6 +10,9 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+presentation = []
+
 [dependencies]
 ironrdp = { path = "../../../ironrdp", features = ["session", "graphics"] }
 ironrdp-core = { path = "../../../ironrdp-core" }
