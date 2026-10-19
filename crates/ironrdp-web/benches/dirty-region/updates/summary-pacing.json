@@ -1,0 +1,816 @@
+{
+  "method": "paired log ratios summarized per fresh browser session, then geometric mean across sessions",
+  "limits": "small-n exploratory intervals; synthetic submission/task responsiveness, not live RDP latency",
+  "results": [
+    {
+      "comparison": "aa",
+      "case": "full",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 1.0012901648175438,
+      "change_percent": 0.12901648175438302,
+      "exploratory_ci95_percent": [
+        -1.973594671709797,
+        2.2767274595757465
+      ],
+      "session_ratios": [
+        1.0177434842509865,
+        0.9887173643164899,
+        1.0066083057904671,
+        0.9923589698473819
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "full",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.0012905800927419,
+      "change_percent": 0.12905800927419261,
+      "exploratory_ci95_percent": [
+        -1.9734119101780758,
+        2.2766216104340327
+      ],
+      "session_ratios": [
+        1.0177419795586713,
+        0.9887173536714499,
+        1.0066094151944691,
+        0.9923610002821777
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "full",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.0012901648175438,
+      "change_percent": 0.12901648175438302,
+      "exploratory_ci95_percent": [
+        -1.973594671709797,
+        2.2767274595757465
+      ],
+      "session_ratios": [
+        1.0177434842509865,
+        0.9887173643164899,
+        1.0066083057904671,
+        0.9923589698473819
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "full",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 1.001428775898806,
+      "change_percent": 0.1428775898806077,
+      "exploratory_ci95_percent": [
+        -2.029318394372283,
+        2.363235282480063
+      ],
+      "session_ratios": [
+        1.0186439734918467,
+        0.9885084768989881,
+        1.0065759194880373,
+        0.9922724006742348
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "full",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 1.001431748320867,
+      "change_percent": 0.14317483208670034,
+      "exploratory_ci95_percent": [
+        -2.0301470333286153,
+        2.364708752411389
+      ],
+      "session_ratios": [
+        1.0186617722050038,
+        0.9885102248681334,
+        1.0065727041000212,
+        0.9922682589488233
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "narrow",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 0.9511953747228484,
+      "change_percent": -4.88046252771516,
+      "exploratory_ci95_percent": [
+        -8.861823322572663,
+        -0.7251764431853415
+      ],
+      "session_ratios": [
+        0.9419229664070773,
+        0.9617621276422728,
+        0.9807301464546546,
+        0.9213960296003928
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "narrow",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 0.9511975461033219,
+      "change_percent": -4.88024538966781,
+      "exploratory_ci95_percent": [
+        -8.860971731239548,
+        -0.7256508106626628
+      ],
+      "session_ratios": [
+        0.9419203302550756,
+        0.9617621276422728,
+        0.9807300607568579,
+        0.9214071022966095
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "narrow",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 0.9511953747228484,
+      "change_percent": -4.88046252771516,
+      "exploratory_ci95_percent": [
+        -8.861823322572663,
+        -0.7251764431853415
+      ],
+      "session_ratios": [
+        0.9419229664070773,
+        0.9617621276422728,
+        0.9807301464546546,
+        0.9213960296003928
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "narrow",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.9566032094571586,
+      "change_percent": -4.339679054284144,
+      "exploratory_ci95_percent": [
+        -8.58609448164588,
+        0.10399349582589568
+      ],
+      "session_ratios": [
+        0.960919641402671,
+        0.9685000572995328,
+        0.9800205740833925,
+        0.918132625224705
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "narrow",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.9566132854309897,
+      "change_percent": -4.338671456901038,
+      "exploratory_ci95_percent": [
+        -8.582155414512108,
+        0.10178888076090394
+      ],
+      "session_ratios": [
+        0.960940513698272,
+        0.9684983727791812,
+        0.98000677148523,
+        0.9181658939469832
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "partial",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 0.9480392170522256,
+      "change_percent": -5.196078294777439,
+      "exploratory_ci95_percent": [
+        -8.361906543461993,
+        -1.9208799345800078
+      ],
+      "session_ratios": [
+        0.9344881586927234,
+        0.9450066212172159,
+        0.9353298050950262,
+        0.9779840772667077
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "partial",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 0.9480551036440589,
+      "change_percent": -5.1944896355941115,
+      "exploratory_ci95_percent": [
+        -8.35822696021324,
+        -1.9215310079907775
+      ],
+      "session_ratios": [
+        0.934526671524829,
+        0.9450066212172159,
+        0.9353539526219232,
+        0.9779840772667077
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "partial",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 0.9480392170522256,
+      "change_percent": -5.196078294777439,
+      "exploratory_ci95_percent": [
+        -8.361906543461993,
+        -1.9208799345800078
+      ],
+      "session_ratios": [
+        0.9344881586927234,
+        0.9450066212172159,
+        0.9353298050950262,
+        0.9779840772667077
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "partial",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.943593810788463,
+      "change_percent": -5.6406189211537,
+      "exploratory_ci95_percent": [
+        -12.666402588540796,
+        1.9503726112931976
+      ],
+      "session_ratios": [
+        0.8825158408303497,
+        0.9868723627291555,
+        0.9413386813209528,
+        0.966965397036021
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "partial",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.9435647441523421,
+      "change_percent": -5.643525584765782,
+      "exploratory_ci95_percent": [
+        -12.673233359092775,
+        1.9520658618107318
+      ],
+      "session_ratios": [
+        0.882481676951409,
+        0.9868247694530624,
+        0.9411711074780311,
+        0.9671024779142289
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "full",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 0.9898932319121745,
+      "change_percent": -1.010676808782547,
+      "exploratory_ci95_percent": [
+        -19.47616782320726,
+        21.689266903511527
+      ],
+      "session_ratios": [
+        1.1691219998184987,
+        0.8515821252637052,
+        0.9861172044848069,
+        0.9779992323062678
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "full",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.0379634663151154,
+      "change_percent": 3.7963466315115353,
+      "exploratory_ci95_percent": [
+        -15.179637683801436,
+        27.01763208563179
+      ],
+      "session_ratios": [
+        1.2232431797635526,
+        0.8977130831410244,
+        1.0339646232092636,
+        1.022285576904659
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "full",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.0381552354716546,
+      "change_percent": 3.8155235471654634,
+      "exploratory_ci95_percent": [
+        -15.180038510962854,
+        27.065171218747412
+      ],
+      "session_ratios": [
+        1.2236270267913913,
+        0.8977116197488076,
+        1.0339646232092636,
+        1.0227220197543194
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "full",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.029091951692952218,
+      "change_percent": -97.09080483070478,
+      "exploratory_ci95_percent": [
+        -97.37857507681889,
+        -96.77144424079853
+      ],
+      "session_ratios": [
+        0.03134289764120905,
+        0.03005961475904237,
+        0.028002836461157546,
+        0.027149813593716068
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "full",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.018496605366504982,
+      "change_percent": -98.1503394633495,
+      "exploratory_ci95_percent": [
+        -98.43271013579952,
+        -97.81709549778304
+      ],
+      "session_ratios": [
+        0.019301990823685486,
+        0.020959974259252317,
+        0.017396322314197823,
+        0.0166309794843994
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "narrow",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 0.8944267939308489,
+      "change_percent": -10.557320606915109,
+      "exploratory_ci95_percent": [
+        -16.3712427231157,
+        -4.339211085880401
+      ],
+      "session_ratios": [
+        0.8961813370893161,
+        0.8424285482208888,
+        0.9266600640554781,
+        0.9148076436380878
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "narrow",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.0188635040190774,
+      "change_percent": 1.8863504019077424,
+      "exploratory_ci95_percent": [
+        -2.876277857061028,
+        6.882522304310455
+      ],
+      "session_ratios": [
+        1.05145836396326,
+        0.9796615501584367,
+        1.0318396280405546,
+        1.0138732800493566
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "narrow",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.0191862391788467,
+      "change_percent": 1.9186239178846678,
+      "exploratory_ci95_percent": [
+        -2.83705116894087,
+        6.907067213204754
+      ],
+      "session_ratios": [
+        1.05167324504085,
+        0.9800312495079464,
+        1.0322383926139924,
+        1.0141762774674619
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "narrow",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.052679794588519305,
+      "change_percent": -94.73202054114806,
+      "exploratory_ci95_percent": [
+        -95.28410772811417,
+        -94.11530077895772
+      ],
+      "session_ratios": [
+        0.05727299716169161,
+        0.05031090001663134,
+        0.05426975259662762,
+        0.04925002467076746
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "narrow",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.040053151039665474,
+      "change_percent": -95.99468489603346,
+      "exploratory_ci95_percent": [
+        -96.63150835926567,
+        -95.23746804413464
+      ],
+      "session_ratios": [
+        0.045531141676249436,
+        0.0412643364105648,
+        0.03904547533349105,
+        0.035082669608502745
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "partial",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 1.0564960310140694,
+      "change_percent": 5.649603101406934,
+      "exploratory_ci95_percent": [
+        -16.833726893565448,
+        34.21111970714515
+      ],
+      "session_ratios": [
+        1.2456684356027605,
+        0.8671444263127357,
+        1.1001801112063951,
+        1.0483680887727147
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "partial",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.472170344088703,
+      "change_percent": 47.2170344088703,
+      "exploratory_ci95_percent": [
+        14.109439202306676,
+        89.93043320209739
+      ],
+      "session_ratios": [
+        1.7917174893758423,
+        1.214267114998645,
+        1.5058537783975794,
+        1.4337244453437235
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "partial",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.4744365412381117,
+      "change_percent": 47.44365412381117,
+      "exploratory_ci95_percent": [
+        14.20109320054426,
+        90.36272361426443
+      ],
+      "session_ratios": [
+        1.796567078625958,
+        1.2161351311553712,
+        1.506986136993117,
+        1.435389660261624
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "partial",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.24829252007945823,
+      "change_percent": -75.17074799205417,
+      "exploratory_ci95_percent": [
+        -83.07914865599446,
+        -63.566150263917834
+      ],
+      "session_ratios": [
+        0.2791204820866832,
+        0.17325856571094198,
+        0.28836283395682527,
+        0.2725391137691
+      ]
+    },
+    {
+      "comparison": "paced30",
+      "case": "partial",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.1802726278486581,
+      "change_percent": -81.97273721513419,
+      "exploratory_ci95_percent": [
+        -88.56166251046405,
+        -71.58833582136313
+      ],
+      "session_ratios": [
+        0.22285175911832597,
+        0.11823917497243883,
+        0.2029270633083957,
+        0.19751574914508627
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "full",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 1.018134455675626,
+      "change_percent": 1.8134455675625918,
+      "exploratory_ci95_percent": [
+        -3.889201183069863,
+        7.8544536715788915
+      ],
+      "session_ratios": [
+        0.9972161714034664,
+        1.0746949198360638,
+        0.9975839687712008,
+        1.005070602300733
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "full",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.0650008675487699,
+      "change_percent": 6.500086754876991,
+      "exploratory_ci95_percent": [
+        0.31723987500740325,
+        13.064000693484873
+      ],
+      "session_ratios": [
+        1.0414628744215084,
+        1.1265461494158837,
+        1.0447826368722748,
+        1.0494968011505337
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "full",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.0650005862702654,
+      "change_percent": 6.5000586270265295,
+      "exploratory_ci95_percent": [
+        0.3171799550804285,
+        13.06400850421508
+      ],
+      "session_ratios": [
+        1.0414617741745027,
+        1.1265461494158837,
+        1.0447826368722748,
+        1.0494968011505337
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "full",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.028309494655607996,
+      "change_percent": -97.16905053443921,
+      "exploratory_ci95_percent": [
+        -97.35564755461401,
+        -96.96928641621024
+      ],
+      "session_ratios": [
+        0.027045660402404553,
+        0.02999127493570017,
+        0.028050618356614182,
+        0.02822887104752009
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "full",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.017436944184357244,
+      "change_percent": -98.25630558156428,
+      "exploratory_ci95_percent": [
+        -98.37724668327627,
+        -98.12635094099053
+      ],
+      "session_ratios": [
+        0.01641318028107953,
+        0.01830872947827258,
+        0.017496171556239264,
+        0.017582779649652734
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "narrow",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 0.90072980022882,
+      "change_percent": -9.927019977117997,
+      "exploratory_ci95_percent": [
+        -16.49242856830018,
+        -2.845435556245643
+      ],
+      "session_ratios": [
+        0.9266441110208367,
+        0.8428457055156535,
+        0.8993437288346332,
+        0.9371117139182472
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "narrow",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.0487252531295228,
+      "change_percent": 4.872525312952289,
+      "exploratory_ci95_percent": [
+        -1.1538935745781709,
+        11.266361045934172
+      ],
+      "session_ratios": [
+        1.0763313484966082,
+        0.9979869130141256,
+        1.0410032834520215,
+        1.0817426884532924
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "narrow",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.0490600669069823,
+      "change_percent": 4.906006690698226,
+      "exploratory_ci95_percent": [
+        -1.130134749546367,
+        11.31066287903459
+      ],
+      "session_ratios": [
+        1.0765793061607567,
+        0.998210175439001,
+        1.0414068839078978,
+        1.0822135276701297
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "narrow",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.04875722176282299,
+      "change_percent": -95.1242778237177,
+      "exploratory_ci95_percent": [
+        -95.34435623336063,
+        -94.8937960179348
+      ],
+      "session_ratios": [
+        0.050876492224324006,
+        0.04794037818837733,
+        0.04848232813994935,
+        0.0477918367300715
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "narrow",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.03462614415546552,
+      "change_percent": -96.53738558445345,
+      "exploratory_ci95_percent": [
+        -96.65567912918047,
+        -96.41490782318004
+      ],
+      "session_ratios": [
+        0.03546043799459943,
+        0.03501681482168451,
+        0.03429547887336727,
+        0.033756617645265746
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "partial",
+      "metric": "active_work_ms",
+      "n_sessions": 4,
+      "ratio": 1.0538450510944837,
+      "change_percent": 5.384505109448368,
+      "exploratory_ci95_percent": [
+        -8.672857739953473,
+        21.605621749777622
+      ],
+      "session_ratios": [
+        1.1660466243627865,
+        0.973346660244997,
+        0.9805441847154427,
+        1.108297654508608
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "partial",
+      "metric": "apply_ms",
+      "n_sessions": 4,
+      "ratio": 1.4363275170920464,
+      "change_percent": 43.63275170920465,
+      "exploratory_ci95_percent": [
+        26.780584349819982,
+        62.72497456419339
+      ],
+      "session_ratios": [
+        1.5768808714752762,
+        1.35099117106139,
+        1.3414240650856435,
+        1.4893488482252573
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "partial",
+      "metric": "finish_ms",
+      "n_sessions": 4,
+      "ratio": 1.4378209007445972,
+      "change_percent": 43.782090074459724,
+      "exploratory_ci95_percent": [
+        26.89476007312782,
+        62.916809285634
+      ],
+      "session_ratios": [
+        1.5786740893295579,
+        1.3525856119049529,
+        1.342451240102888,
+        1.4909511176284493
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "partial",
+      "metric": "heartbeat_gap_max_ms",
+      "n_sessions": 4,
+      "ratio": 0.2606720838329887,
+      "change_percent": -73.93279161670114,
+      "exploratory_ci95_percent": [
+        -75.35613483276758,
+        -72.42724108871448
+      ],
+      "session_ratios": [
+        0.2726384365006166,
+        0.2510199833515405,
+        0.25673050235881834,
+        0.2627878279887379
+      ]
+    },
+    {
+      "comparison": "paced60",
+      "case": "partial",
+      "metric": "task_marker_delay_ms",
+      "n_sessions": 4,
+      "ratio": 0.18375154386567336,
+      "change_percent": -81.62484561343265,
+      "exploratory_ci95_percent": [
+        -82.74486332583902,
+        -80.43212840870746
+      ],
+      "session_ratios": [
+        0.19387493891407306,
+        0.18069100609842823,
+        0.1767182424606791,
+        0.18415537235140061
+      ]
+    }
+  ]
+}

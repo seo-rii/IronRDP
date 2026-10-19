@@ -1,0 +1,33 @@
+{
+  "revision": "8f3b416236111294f025bb4274d6f846d3602a90",
+  "source_origin": "working-tree snapshots; not a replay of the production session loop",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+  "wasm_bindgen": "wasm-bindgen 0.2.126",
+  "rustflags": "-Ctarget-feature=+simd128,+bulk-memory --cfg getrandom_backend=\"wasm_js\" -Copt-level=s -Ccodegen-units=1 -Cllvm-args=-enable-dfa-jump-thread",
+  "profile": "release: opt-level=s, lto=true; no wasm-opt",
+  "sources": {
+    "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+    "canvas.rs": "9c1a2c70268eae78b471f80a07adda2b42610b669ce0fff03d60aef01352d83e",
+    "presentation.rs": "4114b3b8247d64bb8ffad115d676dcabe7f990ac8325431f8bccb5ab5558b36c",
+    "frame_pacing.rs": "ef595dfc9dfb66953f9c6bbddc284eec1a7ae91e00b9a688a778eb9ecc0657e7",
+    "browser_yield.rs": "4003ee058cb87be2541e35ec974f9081583992aa7b6c054b1965e1564ad2477b"
+  },
+  "harness_sha256": {
+    "Cargo.toml": "3c8e28c2529e4de8cf07500931aab38dce546f57d5cdf155576dd6e396352707",
+    "Cargo.lock": "cbf0a6ee18b1b4455a3f06d4612b1bb8cc7186ac4717effe9fd76d944085e86b",
+    "build.rs": "3fe3dc8f40ad6479161069ad31993cf6448eefc6625834b47d2c6718de3c1ce5",
+    "policy.rs": "746f0a0e37a9165c03f4908d3c1ec6aa39c40caf5a3e66156ce98b2d3b319d5b",
+    "src/lib.rs": "5774e487b3b130829318f6de6f9d453d68d11223e2b3d13a0025140198126126",
+    "src/updates.rs": "93ff588a4bd156ccf15e59384ed4ff3d2a7a32bdaf46c2c7115358793cf901f2",
+    "updates/build.py": "c130c766155cdbf553d2e72b5c18dd992a228b196811c004aa0a00b039b2df5b",
+    "updates/browser.py": "21af2d38c4080c1a5559794e784de4a97abe3171fc8bc58644a6470df8e230a5",
+    "updates/browser.js": "a8e4643a7e8ac6e6371c0273764053a21f9f418349a076afe023a3083a9427f4",
+    "updates/index.html": "4b3386db90beb57541faaafcd13e2c7597e5c1c6f93d46eceafbf6f817e97855"
+  },
+  "artifacts": {
+    "ironrdp_web_dirty_region_bench.d.ts": "22a517d8163e1a5ba3bf5a40f97a82631d84a080c9195b381d94a82dd34f1c34",
+    "ironrdp_web_dirty_region_bench.js": "e0bcb444e21d9016a832996902eea790d2f3547e6966a6c8b7ced1003f19e310",
+    "ironrdp_web_dirty_region_bench_bg.wasm": "543db223375e07f4d13302d8e9f3067da4f2ad5744749b0d003d47ec2cde3744",
+    "ironrdp_web_dirty_region_bench_bg.wasm.d.ts": "d0bcad6c623c34e867ec8b46487f51eb8ac264450b1c0a547b8bf4353941467e"
+  }
+}

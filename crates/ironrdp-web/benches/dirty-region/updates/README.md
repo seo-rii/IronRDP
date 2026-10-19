@@ -5,6 +5,9 @@ This auxiliary feature uses the real `Canvas`, `PendingRegions`, and
 decoding, compositor completion, or transported input latency. Historical
 dirty-region and presentation benchmarks retain their existing feature modes.
 
+[Recorded results and tradeoffs](RESULTS.md) include all case summaries, A/A
+controls, timing observations and the exact measured harness revision.
+
 Build with `updates/build.py` from the parent `dirty-region` directory. It snapshots
 the production helpers, selects Rust 1.94.1, and packages the `updates` feature
 with release/LTO, the application WASM flags and wasm-bindgen 0.2.126:
@@ -119,6 +122,8 @@ flushes, maximum queue length, time to first completed draw, workload completion
 a queued task marker, and 4 ms timer heartbeat gaps. Active-work time sums the
 synchronous input/timer branches and final flush; it excludes browser-task waits
 and some loop/selection overhead, and is not a hardware CPU-time measurement.
+Baseline active-work time spans the entire synchronous run, so its ratio against
+the differently scoped paced field must not be interpreted as CPU savings.
 The timer count describes handled Rust timer branches, not every JS timer callback.
 First presentation must follow
 exactly one applied update. Heartbeat sample counts accompany quantiles because
@@ -132,3 +137,12 @@ timer clamping independently of rendering. When the package exports
 `BrowserYield` helper and verifies that all requested wakeups completed. It polls
 and cancels a pending yield, awaits reuse, and drops a second channel with a
 message in flight; subsequent browser tasks must produce no callback errors.
+
+`--correctness-only` additionally runs two idle presentation probes. They use an
+actual Rust `TimeoutFuture` with a pending input future: after the initial draw,
+further updates retain the same deadline, and the timer alone flushes the latest
+pixels. The second probe cancels the timer and performs a terminal flush. Both
+verify all four updates, final source/Canvas bytes, and no further draws during
+an observation period beyond the original deadline. A 200 ms interval leaves
+room for cold Canvas startup; these are correctness checks, not 60 FPS timing
+samples or tests of the complete production Session loop.

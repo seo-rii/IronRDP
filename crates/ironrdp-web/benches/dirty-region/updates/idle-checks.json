@@ -1,0 +1,96 @@
+{
+  "prepared": {
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+    "cross_origin_isolated": true,
+    "hardware_concurrency": 8
+  },
+  "chromium_version": "149.0.7827.55",
+  "started_at_utc": "2026-10-19T02:36:57.988769+00:00",
+  "finished_at_utc": "2026-10-19T02:37:00.743807+00:00",
+  "idle_timer_checks": [
+    {
+      "kind": "idle_timer_flush",
+      "interval_ms": 200,
+      "requested_followup_delay_ms": 10,
+      "handled_presentation_timer_events": 1,
+      "original_delay_ms": 199,
+      "delay_at_same_timestamp_after_updates_ms": 199,
+      "idle_observation_ms": 219,
+      "draws_before_idle": 2,
+      "draws_after_idle": 2,
+      "counts": {
+        "applied_updates": 4,
+        "draw_calls": 2,
+        "uploaded_bytes": 614400,
+        "flush_batches": 2,
+        "forced_flushes": 0,
+        "max_queue": 1,
+        "terminal_flushes": 0
+      },
+      "rgba_equal": true,
+      "source_equal": true,
+      "pending_empty": true,
+      "scope": "production presentation helpers with a synthetic Rust timeout/select driver; not the Session loop"
+    },
+    {
+      "kind": "termination_cancels_timer",
+      "interval_ms": 200,
+      "requested_followup_delay_ms": 10,
+      "handled_presentation_timer_events": 0,
+      "original_delay_ms": 199,
+      "delay_at_same_timestamp_after_updates_ms": 199,
+      "idle_observation_ms": 219,
+      "draws_before_idle": 2,
+      "draws_after_idle": 2,
+      "counts": {
+        "applied_updates": 4,
+        "draw_calls": 2,
+        "uploaded_bytes": 614400,
+        "flush_batches": 2,
+        "forced_flushes": 0,
+        "max_queue": 1,
+        "terminal_flushes": 1
+      },
+      "rgba_equal": true,
+      "source_equal": true,
+      "pending_empty": true,
+      "scope": "production presentation helpers with a synthetic Rust timeout/select driver; not the Session loop"
+    }
+  ],
+  "yield_probe": {
+    "observations": [
+      {
+        "kind": "timer",
+        "count": 32,
+        "elapsed_ms": 111.20500001311302
+      },
+      {
+        "kind": "channel",
+        "count": 32,
+        "elapsed_ms": 1.1299999952316284
+      },
+      {
+        "kind": "channel",
+        "count": 32,
+        "elapsed_ms": 0.3100000023841858
+      },
+      {
+        "kind": "timer",
+        "count": 32,
+        "elapsed_ms": 110.4699999988079
+      },
+      {
+        "kind": "production_rust_channel",
+        "count": 32,
+        "elapsed_ms": 9.814999997615814,
+        "includes_cancel_reuse_drop_checks": true
+      }
+    ],
+    "rust_probe_available": true,
+    "scope": "no-work task-chain overhead; outside all workload timing"
+  },
+  "browser_errors": [],
+  "packet_scenarios_passed": 28,
+  "pacing_scenarios_passed": 18,
+  "scope": "Separate correctness-only package; not used for any reported performance measurements."
+}
