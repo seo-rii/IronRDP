@@ -15,9 +15,11 @@ extern crate getrandom2 as _;
 extern crate getrandom4 as _;
 extern crate time as _;
 
+mod browser_yield;
 mod canvas;
 mod clipboard;
 mod error;
+mod frame_pacing;
 mod image;
 mod input;
 mod network_client;

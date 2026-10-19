@@ -86,4 +86,29 @@ requires an unchanged checkout of the given full Git SHA, as in CI; local workin
 tree checks otherwise record their source hashes and whether they match `HEAD`.
 The browser runner currently requires Linux for its `/proc/stat` host counters.
 
+## Canvas presentation
+
+All RDP updates are applied to the framebuffer. Canvas presentation combines
+pending regions and targets 60 FPS, with an immediate first update. Duplicate
+regions and regions fully contained in another pending region need only one draw;
+disjoint and partially overlapping regions retain their original coverage.
+The queue holds at most 64 regions and flushes before overflowing.
+
+Only pending draws schedule a presentation timer. Additional updates do not
+restart its deadline. Reactivation flushes the old framebuffer before replacing
+it and resets the first-update deadline. Termination flushes the final pending
+regions; errors attempt the same flush while preserving the original error.
+These lifecycle and capacity flushes can occur before the normal frame deadline,
+so 60 FPS is a presentation target rather than a strict Canvas-call limit.
+
+The session yields to browser tasks after about 8 ms of accumulated processing
+work, using a reusable `MessageChannel`. Network waits do not consume that budget.
+Each PDU and presentation batch remains atomic, so this does not bound individual
+long tasks or guarantee a maximum input latency. Protocol responses and cursor
+callbacks do not wait for the presentation timer.
+
+Synthetic correctness and performance checks live in
+[`benches/dirty-region/updates`](benches/dirty-region/updates/README.md).
+
+
 [IronRDP]: https://github.com/Devolutions/IronRDP
