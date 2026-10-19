@@ -47,6 +47,7 @@ impl Canvas {
     }
 
     /// Prepares and uploads a framebuffer update without modifying the source pixels.
+    /// Clips the update to the framebuffer; regions with no overlap are ignored.
     /// The caller must clear `buffer` before each update.
     pub(crate) fn draw_image(
         &self,
@@ -54,6 +55,10 @@ impl Canvas {
         region: InclusiveRectangle,
         buffer: &mut WriteBuf,
     ) -> anyhow::Result<()> {
+        let Some(region) = clip_region(image, &region) else {
+            return Ok(());
+        };
+
         if prefer_fused_copy(image, &region) {
             copy_opaque_rows(image, &region, buffer);
             self.blit(buffer.filled(), region)
@@ -83,6 +88,18 @@ impl Canvas {
             unimplemented!("web canvas is only available on wasm32")
         }
     }
+}
+
+/// Bounds a decoded update before its dimensions or pixel offsets are calculated.
+/// RemoteFX regions can extend past the framebuffer even after decoding succeeds.
+pub(crate) fn clip_region(image: &DecodedImage, region: &InclusiveRectangle) -> Option<InclusiveRectangle> {
+    let bounds = InclusiveRectangle {
+        left: 0,
+        top: 0,
+        right: image.width().checked_sub(1)?,
+        bottom: image.height().checked_sub(1)?,
+    };
+    region.intersect(&bounds)
 }
 
 /// Appends opaque full-width rows without changing existing buffer contents or the framebuffer.

@@ -114,6 +114,26 @@ impl PresentationBenchmark {
         Ok(self.fixture.buffer.filled_len())
     }
 
+    /// Passes inclusive coordinates directly to the current production draw path.
+    /// Historical baselines do not promise clipping and omit this probe.
+    #[cfg(presentation_candidate)]
+    pub fn draw_region(&mut self, left: u16, top: u16, right: u16, bottom: u16) -> Result<usize, JsValue> {
+        self.fixture.buffer.clear();
+        self.canvas
+            .draw_image(
+                &self.fixture.frames[0],
+                ironrdp::pdu::geometry::InclusiveRectangle {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+                &mut self.fixture.buffer,
+            )
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(self.fixture.buffer.filled_len())
+    }
+
     pub fn expected_pixels(&self, frame_index: usize) -> Vec<u8> {
         let mut pixels = self.source_pixels(frame_index);
         for pixel in pixels.chunks_exact_mut(4) {

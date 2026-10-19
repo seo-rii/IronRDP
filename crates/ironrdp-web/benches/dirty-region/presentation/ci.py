@@ -26,6 +26,12 @@ CASES = (
     "3840x2160/3840x2160", "3840x2160/64x1440", "3840x2160/3072x1440",
 )
 
+BOUNDS_CASES = (
+    "right-overflow", "bottom-overflow", "both-overflow", "outside-right", "outside-bottom",
+    "outside-both", "inverted-horizontal", "inverted-vertical", "maximum-coordinates", "maximum-outside",
+    "last-pixel", "maximum-right", "clipped-whole-rows", "clipped-below-cap", "clipped-full-width-fusion",
+)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -137,9 +143,21 @@ def main():
         observed = correctness["prepared"].get("simd128")
         if observed != [False, True]:
             raise RuntimeError(f"WASM target features were not scalar/SIMD as required: {observed!r}")
+        expected_bounds = {(case, initialized) for case in BOUNDS_CASES for initialized in (False, True)}
+        bounds_checks = {}
+        for variant in ("baseline", "candidate"):
+            rows = [row for row in correctness["correctness"].get("bounds", []) if row.get("variant") == variant]
+            observed_bounds = {(row.get("case"), row.get("initialized")) for row in rows}
+            if len(rows) != len(expected_bounds) or observed_bounds != expected_bounds:
+                raise RuntimeError(f"{variant} did not execute every sparse and initialized bounds check")
+            if any(row.get("rgba_checks") != 1 or row.get("source_unchanged") is not True
+                   or row.get("buffer_bytes_checked") is not True for row in rows):
+                raise RuntimeError(f"{variant} bounds checks did not verify pixels, source and buffer length")
+            bounds_checks[variant] = len(rows)
         if any(digest(path) != expected for path, expected in original_hashes.items()):
             raise RuntimeError("production or harness files changed during the check")
         report.update(status="passed", observed_simd128=observed,
+                      bounds_checks=bounds_checks,
                       chromium_version=correctness["chromium_version"],
                       correctness_sha256=digest(output / "results/correctness.json"),
                       build_manifest_sha256=digest(output / "build-manifest.json"))

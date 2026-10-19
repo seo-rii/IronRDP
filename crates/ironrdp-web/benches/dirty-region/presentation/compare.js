@@ -86,6 +86,76 @@ function checkFixture(module, fixture, label) {
     }
 }
 
+function checkBounds() {
+    // Expected upload bounds include the existing whole-row expansion policy.
+    // Explicit outcomes keep this oracle independent of the clipping implementation.
+    const fixtures = [
+        {name: "right-overflow", region: [90, 7, 120, 73], upload: [90, 7, 95, 73]},
+        {name: "bottom-overflow", region: [13, 80, 44, 100], upload: [13, 80, 44, 87]},
+        {name: "both-overflow", region: [91, 84, 120, 100], upload: [91, 84, 95, 87]},
+        {name: "outside-right", region: [96, 7, 120, 73], upload: null},
+        {name: "outside-bottom", region: [13, 88, 44, 110], upload: null},
+        {name: "outside-both", region: [96, 88, 120, 100], upload: null},
+        {name: "inverted-horizontal", region: [19, 7, 18, 73], upload: null},
+        {name: "inverted-vertical", region: [13, 8, 44, 7], upload: null},
+        {name: "maximum-coordinates", region: [0, 0, 65535, 65535], upload: [0, 0, 95, 87]},
+        {name: "maximum-outside", region: [65535, 65535, 65535, 65535], upload: null},
+        {name: "last-pixel", region: [95, 87, 95, 87], upload: [95, 87, 95, 87]},
+        {name: "maximum-right", region: [95, 5, 65535, 75], upload: [95, 5, 95, 75]},
+        {name: "clipped-whole-rows", region: [19, 3, 120, 73], upload: [0, 3, 95, 73]},
+        {name: "clipped-below-cap", region: [20, 3, 120, 73], upload: [20, 3, 95, 73]},
+        {name: "clipped-full-width-fusion", imageWidth: 1920, imageHeight: 40,
+            region: [0, 5, 65535, 65535], upload: [0, 5, 1919, 39]},
+    ];
+    const results = [];
+    current.modules.forEach((module, index) => {
+        // Historical packages retain their original behavior. ci.py separately
+        // requires both current-source builds to execute every bounds check.
+        if (typeof module.PresentationBenchmark.prototype.draw_region !== "function") return;
+        for (const fixture of fixtures) {
+            const {name, imageWidth = 96, imageHeight = 88, region, upload} = fixture;
+            for (const initialized of [false, true]) {
+                const canvas = document.createElement("canvas");
+                const bench = new module.PresentationBenchmark(canvas,
+                    imageWidth, imageHeight, 0, 0, imageWidth, imageHeight);
+                try {
+                    const before = [bench.source_pixels(0), bench.source_pixels(1)];
+                    if (initialized) bench.draw_batch(0, 0, imageWidth, imageHeight, 2);
+                    const expected = initialized ? new Uint8ClampedArray(bench.expected_pixels(1)) :
+                        new Uint8ClampedArray(imageWidth * imageHeight * 4);
+                    let expectedBytes = 0;
+                    if (upload) {
+                        const [left, top, right, bottom] = upload;
+                        expectedBytes = (right - left + 1) * (bottom - top + 1) * 4;
+                        for (let y = top; y <= bottom; y++) {
+                            for (let x = left; x <= right; x++) {
+                                const offset = (y * imageWidth + x) * 4;
+                                expected.set(before[0].subarray(offset, offset + 3), offset);
+                                expected[offset + 3] = 255;
+                            }
+                        }
+                    }
+                    const bytes = bench.draw_region(...region);
+                    const label = `${current.pair[index]} ${name} initialized=${initialized}`;
+                    if (bytes !== expectedBytes) {
+                        throw new Error(`${label}: buffer bytes ${bytes} != ${expectedBytes}`);
+                    }
+                    equal(pixels(canvas), expected, `${label} RGBA`);
+                    for (const frameIndex of [0, 1]) {
+                        equal(bench.source_pixels(frameIndex), before[frameIndex], `${label} source unchanged`);
+                    }
+                    results.push({variant: current.pair[index], case: name, initialized, imageWidth, imageHeight,
+                        region, upload, buffer_bytes: bytes, no_op: upload === null,
+                        rgba_checks: 1, source_unchanged: true, buffer_bytes_checked: true});
+                } finally {
+                    bench.free();
+                }
+            }
+        }
+    });
+    return results;
+}
+
 window.checkCorrectness = ({extraFixtures = []} = {}) => {
     const checks = [];
     const fixtures = [1, 2, 3, 4, 5, 7, 15, 16, 17].map(width => ({
@@ -195,7 +265,7 @@ window.checkCorrectness = ({extraFixtures = []} = {}) => {
         probes.push({variant: current.pair[index], alpha_checks: alphaChecks, copy_checks: copyChecks,
             offsets: [0, 15], lengths: [0, 67], prefix_suffix_and_incomplete_pixel_checked: true});
     });
-    return {initialized: checks, sparse, probes};
+    return {initialized: checks, sparse, probes, bounds: checkBounds()};
 };
 
 window.measureCase = async ({fixture, samples = 12, targetMs = 16, warmupMs = 400,

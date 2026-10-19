@@ -40,6 +40,11 @@ first upload. Extraction can select whole rows for sufficiently wide dirty
 regions, so the uploaded region can be wider than the dirty region. The client
 does not fill the entire Canvas with opaque black on initialization or resize.
 
+Dirty regions are intersected with the framebuffer before selecting a copy path
+or calculating pixel offsets. Partly overlapping regions draw their visible
+portion; regions outside the framebuffer or with reversed bounds do not upload
+pixels.
+
 ## Browser pixel correctness
 
 The [Web pixel correctness workflow](../../.github/workflows/web-pixel-correctness.yml)
@@ -50,11 +55,12 @@ verify which implementation each package compiled. No historical Git revision
 or benchmark patch is needed.
 
 The checks cover full and partial updates, whole-row expansion and full-width
-fusion thresholds, unaligned pixel-copy buffers, incomplete trailing pixels, sparse first updates,
-resizes, source immutability, and equality of the resulting Canvas pixels. CI
-retains commit IDs, source/package hashes, browser information and correctness
-results as artifacts. It runs no performance measurements and does not emulate
-a browser lacking SIMD support.
+fusion thresholds, unaligned pixel-copy buffers, incomplete trailing pixels,
+sparse first updates, resizes, out-of-bounds update clipping, source immutability,
+and equality of the resulting Canvas pixels. CI retains commit IDs,
+source/package hashes, browser information and correctness results as artifacts.
+It runs no performance measurements and does not emulate a browser lacking SIMD
+support.
 
 To run the same check locally on Linux, install the repository Rust toolchain's
 `wasm32-unknown-unknown` target, `wasm-bindgen-cli` 0.2.126, Python 3.11+, Playwright and
