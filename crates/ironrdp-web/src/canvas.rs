@@ -39,9 +39,7 @@ impl Canvas {
     /// Blits a dirty region with `put_image_data`. Forces alpha opaque first: the framebuffer isn't
     /// guaranteed opaque (zero-init columns, QOI-RGBA) and `put_image_data` stores alpha verbatim.
     pub(crate) fn draw(&self, buffer: &mut [u8], region: InclusiveRectangle) -> anyhow::Result<()> {
-        for pixel in buffer.chunks_exact_mut(4) {
-            pixel[3] = 0xFF;
-        }
+        make_opaque(buffer);
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -60,6 +58,30 @@ impl Canvas {
             let _ = (&self.ctx, buffer, region);
             unimplemented!("web canvas is only available on wasm32")
         }
+    }
+}
+
+/// Forces complete RGBA pixels opaque, preserving RGB and any incomplete trailing pixel.
+pub(crate) fn make_opaque(buffer: &mut [u8]) {
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    let buffer = {
+        use core::arch::wasm32::{u32x4_splat, v128_load, v128_or, v128_store};
+
+        let alpha = u32x4_splat(0xFF00_0000);
+        let mut chunks = buffer.chunks_exact_mut(16);
+        for chunk in &mut chunks {
+            let ptr = chunk.as_mut_ptr().cast();
+            // SAFETY: The chunk contains 16 initialized bytes; v128_load accepts unaligned pointers.
+            let pixels = unsafe { v128_load(ptr) };
+            let opaque = v128_or(pixels, alpha);
+            // SAFETY: The chunk uniquely owns these 16 bytes; v128_store accepts unaligned pointers.
+            unsafe { v128_store(ptr, opaque) };
+        }
+        chunks.into_remainder()
+    };
+
+    for pixel in buffer.chunks_exact_mut(4) {
+        pixel[3] = 0xFF;
     }
 }
 
