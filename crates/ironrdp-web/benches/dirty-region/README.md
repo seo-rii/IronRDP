@@ -25,6 +25,8 @@ another checkout contains the same package names and versions. The standalone
 lockfile pins benchmark dependencies without changing the application lockfile.
 Python's `playwright` package and a Chromium installation are prerequisites;
 `--chromium /path/to/chromium` can select an existing installation.
+The separate presentation comparison and scalar/SIMD CI runner require Linux
+for their `/proc/stat` host telemetry; see [presentation/README.md](presentation/README.md).
 
 ```sh
 export CARGO_TARGET_DIR="$PWD/target"

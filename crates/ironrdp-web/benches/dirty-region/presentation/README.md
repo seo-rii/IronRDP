@@ -15,8 +15,13 @@ This experiment compares three independently compiled implementations:
 These remain the default historical comparison. The `direct` build mode below
 instead compares the current SIMD baseline with the working-tree implementation.
 
-`build.py` reads the pinned baseline with `git show` and applies `simd.patch` or
-`fused.patch` to ignored source snapshots. It uses the application WASM flags,
+`build.py` reads the frozen `ea9c379b` sources in [`baseline/`](baseline/) and applies
+`simd.patch` or `fused.patch` to ignored source snapshots. The defaults do not read
+Git history: shallow clones, squash merges and source archives can reproduce both
+historical and direct comparisons without the original fork's intermediate commits.
+[`baseline/manifest.json`](baseline/manifest.json) records the source repository,
+original revisions, SHA-256 hashes of the frozen sources, patches and generated
+variants. The builder verifies the hashes before compiling each variant. It uses the application WASM flags,
 release size optimization and LTO. Each build calls its own `extract_partial_image`
 and `Canvas::draw` directly, without a policy switch in the timed path. The extra
 Rust and JavaScript exports live only in this auxiliary benchmark crate. Source,
@@ -24,6 +29,11 @@ harness, compiler and package hashes are recorded in `build-manifest.json`;
 the browser runner verifies the package hashes before launching Chromium.
 
 ## Run
+
+Run the browser measurements on **Linux**: `compare.py` reads `/proc/stat` and
+host load averages for its CPU-load controls. Windows and macOS are not supported
+by this runner. These Linux measurements do not substitute for profiling a
+deployed Windows browser with hardware acceleration.
 
 From the parent `dirty-region` directory, with Rust 1.94.1, wasm-bindgen-cli
 0.2.126, Python Playwright, Chromium and `patch` installed:
@@ -38,6 +48,13 @@ python3 presentation/summarize.py output/presentation-current/measurements
 ```
 
 `build.py` defaults to an isolated target directory under its output directory.
+It removes inherited `CARGO_ENCODED_RUSTFLAGS`, which otherwise takes precedence
+over the recorded `RUSTFLAGS`, and requires the WASM build to report `simd128` as
+enabled. This includes the historical `scalar` variant: its alpha loop remains
+scalar source code, compiled with the same application flags as the other variants.
+The separate [`ci.py`](ci.py) correctness check builds current production sources
+with SIMD both enabled and disabled and verifies the loaded modules' feature probes;
+see the [crate README](../../../README.md) for the CI and local command.
 It explicitly selects Rust 1.94.1; `--toolchain 1.94.0` reproduces the compiler
 used for the recorded measurements. The initial run inherited an environment
 override, which is recorded in its manifest and confirmed in WASM producer metadata.
@@ -56,7 +73,9 @@ candidate source hashes exactly.
 ## Direct comparison against current SIMD
 
 Use a new output directory to compare the SIMD implementation at `289f710e` with
-the current working-tree `image.rs` and `canvas.rs`:
+the current working-tree `image.rs` and `canvas.rs`. The bundled direct baseline
+is reconstructed by applying `simd.patch` to the frozen scalar sources. Its
+resulting bytes are checked against the hashes of the original `289f710e` files:
 
 ```sh
 python3 presentation/build.py --mode direct --wasm-bindgen /path/to/wasm-bindgen \
@@ -80,13 +99,18 @@ odd framebuffer widths, and sizes on either side of an implementation threshold
 can be added without changing the harness. Every selected case is also checked
 for RGBA equality and source immutability before measurement.
 
-Both direct builds call `Canvas::draw_image`. For the baseline only, the builder
-appends a benchmark adapter that calls its existing `extract_partial_image` and
-`Canvas::draw`. The candidate calls the real working-tree method. No runtime
+Both direct builds call `Canvas::draw_image`. If the baseline lacks that method,
+the builder appends a benchmark adapter that calls its existing
+`extract_partial_image` and `Canvas::draw`. Baselines already providing the method
+and the candidate call their real implementations. No runtime
 policy dispatch is added to either timed path. The manifest records production
 source hashes before adaptation, compiled source hashes, and the adapter hash.
-It still pins Rust 1.94.1, and `--baseline` can select a different compatible Git
-revision explicitly. Finish editing the candidate before building it; builds
+It still pins Rust 1.94.1. The manifest also records whether the baseline came
+from the bundle or Git, along with the bundled provenance manifest and its hash.
+An explicit `--baseline <revision>` selects a compatible revision from the local
+Git history instead; only this override requires fetching that revision first.
+Historical overrides must accept the existing patches, while direct overrides
+must provide the pixel-processing APIs used by the harness. Finish editing the candidate before building it; builds
 snapshot the source into the ignored output directory.
 
 The direct candidate's copy probe calls `canvas::copy_opaque_rgba` in actual WASM,

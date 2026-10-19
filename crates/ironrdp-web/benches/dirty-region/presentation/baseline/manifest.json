@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/seo-rii/IronRDP",
+  "variants": {
+    "scalar": {
+      "revision": "ea9c379b9e0b5bcf59cc531f4b97316c24040cf7",
+      "sources": {
+        "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+        "canvas.rs": "63aeb6af765b7081d47b0591749df583040e36be0a9a7633f95d12f127146735"
+      },
+      "patch_sha256": null
+    },
+    "simd": {
+      "revision": "289f710ed07790f3691d4edcd188294f9bef9251",
+      "sources": {
+        "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+        "canvas.rs": "4497ddbab1479e04343dc5c254712fb4496383d4192a0fcd58783311650f2475"
+      },
+      "patch_sha256": "8c8861b0ba09eac81ecaec68f4e7e18b247c2a736914aa920cc7ffc9fb95e9a6"
+    },
+    "fused": {
+      "revision": null,
+      "sources": {
+        "image.rs": "50292c16db7c042a0c62aea171ca1821ea76f35758489be014a2dc2c524f5d03",
+        "canvas.rs": "742404b99044c019a6929ee28cb1656127c4edef50c2555e908d7dbb07c5393a"
+      },
+      "patch_sha256": "7b31a7ab91b147dcdc769abf8cc2014e01adfc242d73a0a8db5455c9c01d992c"
+    }
+  }
+}

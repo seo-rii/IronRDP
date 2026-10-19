@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -12,8 +13,7 @@ import subprocess
 HERE = Path(__file__).resolve().parent
 BENCH = HERE.parent
 REPO = BENCH.parents[3]
-BASELINE = "ea9c379b9e0b5bcf59cc531f4b97316c24040cf7"
-DIRECT_BASELINE = "289f710ed07790f3691d4edcd188294f9bef9251"
+BUNDLED_BASELINE = HERE / "baseline"
 FLAGS = ('-Ctarget-feature=+simd128,+bulk-memory --cfg getrandom_backend="wasm_js" '
          '-Copt-level=s -Ccodegen-units=1 -Cllvm-args=-enable-dfa-jump-thread')
 BASELINE_ADAPTER = """
@@ -37,6 +37,15 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def source_hashes(directory):
+    return {name: digest(directory / name) for name in ("image.rs", "canvas.rs")}
+
+
+def verify_hashes(actual, expected, description):
+    if actual != expected:
+        raise RuntimeError(f"{description} hashes do not match baseline/manifest.json: {actual}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=BENCH / "output/simd-presentation-20261019")
@@ -44,20 +53,35 @@ def main():
     parser.add_argument("--wasm-bindgen", default=shutil.which("wasm-bindgen"))
     parser.add_argument("--mode", choices=("historical", "direct"), default="historical",
                         help="historical scalar/SIMD/fused, or current SIMD versus working-tree candidate")
-    parser.add_argument("--baseline", help="Git baseline; defaults to ea9c379b historically or 289f710e in direct mode")
+    parser.add_argument("--baseline", help="override the bundled baseline with a compatible Git revision")
     parser.add_argument("--toolchain", default="1.94.1", help="explicit rustup toolchain; ignores ambient override")
     args = parser.parse_args()
     if not args.wasm_bindgen:
         parser.error("supply --wasm-bindgen matching the locked wasm-bindgen crate")
-    args.baseline = args.baseline or (DIRECT_BASELINE if args.mode == "direct" else BASELINE)
+    bundled = None
+    if args.baseline is None:
+        bundled = json.loads((BUNDLED_BASELINE / "manifest.json").read_text())
+        if bundled["schema_version"] != 1:
+            raise RuntimeError("unsupported bundled baseline manifest version")
+        verify_hashes(source_hashes(BUNDLED_BASELINE), bundled["variants"]["scalar"]["sources"],
+                      "bundled scalar source")
+        baseline_variant = "simd" if args.mode == "direct" else "scalar"
+        baseline_revision = bundled["variants"][baseline_variant]["revision"]
+    else:
+        baseline_revision = subprocess.check_output(
+            ["git", "rev-parse", args.baseline], cwd=REPO, text=True).strip()
     variants = ["baseline", "candidate"] if args.mode == "direct" else ["scalar", "simd", "fused"]
     output = args.output.resolve()
     target = (args.target_dir or output / "target").resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "baseline": args.baseline,
-        "baseline_revision": subprocess.check_output(
-            ["git", "rev-parse", args.baseline], cwd=REPO, text=True).strip(),
+        "baseline": args.baseline or baseline_revision,
+        "baseline_revision": baseline_revision,
+        "baseline_origin": "bundled" if bundled else "git",
+        "bundled_baseline": {
+            "manifest_sha256": digest(BUNDLED_BASELINE / "manifest.json"),
+            **bundled,
+        } if bundled else None,
         "mode": args.mode,
         "comparison_baseline": variants[0],
         "rustc": subprocess.check_output(["rustc", f"+{args.toolchain}", "-Vv"], cwd=BENCH, text=True),
@@ -75,21 +99,48 @@ def main():
         for filename in ["image.rs", "canvas.rs"]:
             if variant == "candidate":
                 content = (REPO / "crates/ironrdp-web/src" / filename).read_bytes()
+            elif bundled:
+                content = (BUNDLED_BASELINE / filename).read_bytes()
             else:
                 content = subprocess.check_output(
-                    ["git", "show", f"{args.baseline}:crates/ironrdp-web/src/{filename}"], cwd=REPO)
+                    ["git", "show", f"{baseline_revision}:crates/ironrdp-web/src/{filename}"], cwd=REPO)
             (sources / filename).write_bytes(content)
-        production_sources = {filename: digest(sources / filename) for filename in ["image.rs", "canvas.rs"]}
+        production_sources = source_hashes(sources)
+        patch_variant = None
         if args.mode == "historical" and variant != "scalar":
-            subprocess.run(["patch", "--batch", "--forward", "-p1", "-d", str(sources),
-                            "-i", str(HERE / f"{variant}.patch")], check=True)
+            patch_variant = variant
+        elif bundled and variant == "baseline":
+            patch_variant = "simd"
+        patch_sha256 = None
+        if patch_variant:
+            patch = HERE / f"{patch_variant}.patch"
+            patch_sha256 = digest(patch)
+            if bundled:
+                verify_hashes(patch_sha256, bundled["variants"][patch_variant]["patch_sha256"],
+                              f"{patch_variant} patch")
+            subprocess.run(["patch", "--batch", "--forward", "--fuzz=0", "-p1", "-d", str(sources),
+                            "-i", str(patch)], check=True)
+        if bundled and variant != "candidate":
+            source_variant = "simd" if variant == "baseline" else variant
+            verify_hashes(source_hashes(sources), bundled["variants"][source_variant]["sources"],
+                          f"bundled {source_variant} source")
+        adapter_sha256 = None
         if variant == "baseline":
+            # The bundled direct baseline is generated from scalar sources; record its
+            # actual production bytes after the SIMD patch and before any adapter.
+            production_sources = source_hashes(sources)
             canvas_source = sources / "canvas.rs"
-            canvas_source.write_text(canvas_source.read_text() + BASELINE_ADAPTER)
+            if not re.search(r"\bfn\s+draw_image\s*\(", canvas_source.read_text()):
+                canvas_source.write_text(canvas_source.read_text() + BASELINE_ADAPTER)
+                adapter_sha256 = hashlib.sha256(BASELINE_ADAPTER.encode()).hexdigest()
         env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_BUILD_BUILD_DIR=str(target / "build"),
                    RUSTFLAGS=FLAGS, IRONRDP_BENCH_VARIANT=variant,
+                   IRONRDP_BENCH_EXPECT_SIMD128="1",
                    IRONRDP_BENCH_IMAGE_SOURCE=str(sources / "image.rs"),
                    IRONRDP_BENCH_CANVAS_SOURCE=str(sources / "canvas.rs"))
+        # Cargo gives this variable precedence over RUSTFLAGS. The recorded flags
+        # must be the flags used by every variant, regardless of the parent shell.
+        env.pop("CARGO_ENCODED_RUSTFLAGS", None)
         subprocess.run(["cargo", f"+{args.toolchain}", "build", "--lib", "--locked", "--release", "--target", "wasm32-unknown-unknown",
                         "--features", "presentation"], cwd=BENCH, env=env, check=True)
         package = output / "pkg" / variant
@@ -98,12 +149,11 @@ def main():
                         "--target", "web", "--out-dir", str(package)], check=True)
         manifest["variants"][variant] = {
             "production_sources": production_sources,
-            "sources": {f: digest(sources / f) for f in ["image.rs", "canvas.rs"]},
+            "sources": source_hashes(sources),
             "artifacts": {p.name: digest(p) for p in sorted(package.iterdir()) if p.is_file()},
-            "patch_sha256": digest(HERE / f"{variant}.patch") if variant in ("simd", "fused") else None,
-            "adapter_sha256": hashlib.sha256(BASELINE_ADAPTER.encode()).hexdigest()
-                              if variant == "baseline" else None,
-            "source_origin": "working tree" if variant == "candidate" else args.baseline,
+            "patch_sha256": patch_sha256,
+            "adapter_sha256": adapter_sha256,
+            "source_origin": "working tree" if variant == "candidate" else baseline_revision,
         }
         (output / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Built all variants: {output}")
