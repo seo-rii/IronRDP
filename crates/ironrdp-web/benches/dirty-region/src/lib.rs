@@ -102,7 +102,10 @@ impl Fixture {
 #[cfg(all(target_arch = "wasm32", feature = "presentation"))]
 mod presentation;
 
-#[cfg(all(target_arch = "wasm32", not(feature = "presentation")))]
+#[cfg(all(target_arch = "wasm32", feature = "updates"))]
+mod updates;
+
+#[cfg(all(target_arch = "wasm32", not(any(feature = "presentation", feature = "updates"))))]
 mod browser {
     use core::num::NonZeroU32;
 
