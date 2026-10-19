@@ -2,14 +2,16 @@ use core::num::NonZeroU32;
 
 #[cfg(target_arch = "wasm32")]
 use anyhow::anyhow;
-use ironrdp::pdu::geometry::InclusiveRectangle;
-#[cfg(target_arch = "wasm32")]
-use ironrdp::pdu::geometry::Rectangle as _;
+use ironrdp::pdu::geometry::{InclusiveRectangle, Rectangle as _};
+use ironrdp::session::image::DecodedImage;
+use ironrdp_core::WriteBuf;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{Clamped, JsCast as _};
 #[cfg(target_arch = "wasm32")]
 use web_sys::ImageData;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
+
+use crate::image::extract_partial_image;
 
 /// Web render surface: blits each dirty region to the canvas with `put_image_data`.
 pub(crate) struct Canvas {
@@ -41,10 +43,32 @@ impl Canvas {
     pub(crate) fn draw(&self, buffer: &mut [u8], region: InclusiveRectangle) -> anyhow::Result<()> {
         make_opaque(buffer);
 
+        self.blit(buffer, region)
+    }
+
+    /// Prepares and uploads a framebuffer update without modifying the source pixels.
+    /// The caller must clear `buffer` before each update.
+    pub(crate) fn draw_image(
+        &self,
+        image: &DecodedImage,
+        region: InclusiveRectangle,
+        buffer: &mut WriteBuf,
+    ) -> anyhow::Result<()> {
+        if prefer_fused_copy(image, &region) {
+            copy_opaque_rows(image, &region, buffer);
+            self.blit(buffer.filled(), region)
+        } else {
+            let region = extract_partial_image(image, region, buffer);
+            self.draw(buffer.filled_mut(), region)
+        }
+    }
+
+    /// Uploads pixels whose alpha has already been made opaque.
+    fn blit(&self, buffer: &[u8], region: InclusiveRectangle) -> anyhow::Result<()> {
         #[cfg(target_arch = "wasm32")]
         {
             let image = ImageData::new_with_u8_clamped_array_and_sh(
-                Clamped(&*buffer),
+                Clamped(buffer),
                 u32::from(region.width()),
                 u32::from(region.height()),
             )
@@ -58,6 +82,57 @@ impl Canvas {
             let _ = (&self.ctx, buffer, region);
             unimplemented!("web canvas is only available on wasm32")
         }
+    }
+}
+
+/// Appends opaque full-width rows without changing existing buffer contents or the framebuffer.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the source image bounds the row offsets and length"
+)]
+pub(crate) fn copy_opaque_rows(image: &DecodedImage, region: &InclusiveRectangle, buffer: &mut WriteBuf) {
+    debug_assert_eq!(region.left, 0);
+    debug_assert_eq!(region.width(), image.width());
+    let stride = usize::from(image.width()) * 4;
+    let len = stride * usize::from(region.height());
+    let begin = usize::from(region.top) * stride;
+    copy_opaque_rgba(&image.data()[begin..begin + len], buffer.unfilled_to(len));
+    buffer.advance(len);
+}
+
+#[expect(clippy::arithmetic_side_effects, reason = "two u16 dimensions fit in a wasm32 usize")]
+fn prefer_fused_copy(image: &DecodedImage, region: &InclusiveRectangle) -> bool {
+    // Avoid the per-row SIMD overhead observed for narrow updates. Small full-width updates
+    // also retain the existing path; this threshold is checked by the browser benchmark.
+    const MIN_FUSED_PIXELS: usize = 256 * 1024 / 4;
+    region.left == 0
+        && region.width() == image.width()
+        && MIN_FUSED_PIXELS <= usize::from(image.width()) * usize::from(region.height())
+}
+
+/// Copies complete RGBA pixels with opaque alpha, preserving incomplete trailing pixels.
+pub(crate) fn copy_opaque_rgba(src: &[u8], dst: &mut [u8]) {
+    assert_eq!(src.len(), dst.len());
+
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    let (src, dst) = {
+        use core::arch::wasm32::{u32x4_splat, v128_load, v128_or, v128_store};
+
+        let alpha = u32x4_splat(0xFF00_0000);
+        let mut sources = src.chunks_exact(16);
+        let mut targets = dst.chunks_exact_mut(16);
+        for (source, target) in sources.by_ref().zip(targets.by_ref()) {
+            // SAFETY: Each source owns 16 initialized bytes; SIMD loads accept unaligned pointers.
+            let pixels = unsafe { v128_load(source.as_ptr().cast()) };
+            // SAFETY: Each target uniquely owns 16 bytes; SIMD stores accept unaligned pointers.
+            unsafe { v128_store(target.as_mut_ptr().cast(), v128_or(pixels, alpha)) };
+        }
+        (sources.remainder(), targets.into_remainder())
+    };
+
+    dst.copy_from_slice(src);
+    for pixel in dst.chunks_exact_mut(4) {
+        pixel[3] = 255;
     }
 }
 
