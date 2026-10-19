@@ -44,7 +44,9 @@ window.prepare = async ({pair = ["scalar", "simd", "fused"],
         modules.push(module);
     }
     current = {pair, modules, baseline};
-    return {pair, baseline, user_agent: navigator.userAgent, cross_origin_isolated: crossOriginIsolated,
+    return {pair, baseline, simd128: modules.map(module =>
+        typeof module.simd128_enabled === "function" ? module.simd128_enabled() : null),
+        user_agent: navigator.userAgent, cross_origin_isolated: crossOriginIsolated,
         hardware_concurrency: navigator.hardwareConcurrency, performance_time_origin: performance.timeOrigin};
 };
 
@@ -111,22 +113,31 @@ window.checkCorrectness = ({extraFixtures = []} = {}) => {
     }
 
     const sparse = [];
+    const sparseFixtures = [17, 80].map(width => ({
+        imageWidth: 96, imageHeight: 88, left: 9, top: 5, width, height: 65,
+    }));
+    for (const extra of extraFixtures) {
+        if (!sparseFixtures.some(existing => dimensions.every(key => existing[key] === extra[key]))) {
+            sparseFixtures.push(extra);
+        }
+    }
     for (const resized of [false, true]) {
-        for (const width of [17, 80]) {
+        for (const fixture of sparseFixtures) {
+            const {left, top, width, height} = fixture;
             let reference;
             current.modules.forEach((module, index) => {
                 const canvas = document.createElement("canvas");
-                const bench = new module.PresentationBenchmark(canvas, 96, 88, 0, 0, 96, 88);
+                const bench = new module.PresentationBenchmark(canvas,
+                    fixture.imageWidth, fixture.imageHeight, 0, 0, fixture.imageWidth, fixture.imageHeight);
                 try {
-                    const imageWidth = resized ? 97 : 96;
-                    const imageHeight = resized ? 91 : 88;
+                    const imageWidth = fixture.imageWidth + (resized && fixture.imageWidth < 65535 ? 1 : 0);
+                    const imageHeight = fixture.imageHeight + (resized && fixture.imageHeight < 65533 ? 3 : 0);
                     if (resized) {
-                        bench.draw_batch(0, 0, 96, 88, 2);
+                        bench.draw_batch(0, 0, fixture.imageWidth, fixture.imageHeight, 2);
                         bench.resize(imageWidth, imageHeight);
                     } else {
                         bench.clear_source();
                     }
-                    const left = 9, top = 5, height = 65;
                     bench.paint(left, top, width, height, 31);
                     const before = [bench.source_pixels(0), bench.source_pixels(1)];
                     const expected = new Uint8ClampedArray(imageWidth * imageHeight * 4);
@@ -148,7 +159,8 @@ window.checkCorrectness = ({extraFixtures = []} = {}) => {
                     for (const frameIndex of [0, 1]) {
                         equal(bench.source_pixels(frameIndex), before[frameIndex], "sparse source unchanged");
                     }
-                    sparse.push({variant: current.pair[index], resized, width, height, whole_rows: wholeRows,
+                    sparse.push({variant: current.pair[index], resized, imageWidth, imageHeight,
+                        left, top, width, height, whole_rows: wholeRows,
                         rgba_checks: 2, source_unchanged: true});
                 } finally {
                     bench.free();

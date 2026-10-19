@@ -8,6 +8,11 @@ use web_sys::HtmlCanvasElement;
 use super::{Fixture, canvas::Canvas, image, rectangle};
 
 #[wasm_bindgen]
+pub fn simd128_enabled() -> bool {
+    cfg!(target_feature = "simd128")
+}
+
+#[wasm_bindgen]
 pub struct PresentationBenchmark {
     fixture: Fixture,
     canvas: Canvas,

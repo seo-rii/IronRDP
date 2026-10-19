@@ -7,8 +7,22 @@ fn main() {
         "IRONRDP_BENCH_IMAGE_SOURCE",
         "IRONRDP_BENCH_CANVAS_SOURCE",
         "IRONRDP_BENCH_VARIANT",
+        "IRONRDP_BENCH_EXPECT_SIMD128",
     ] {
         println!("cargo:rerun-if-env-changed={variable}");
+    }
+    if let Some(expected) = env::var_os("IRONRDP_BENCH_EXPECT_SIMD128") {
+        let expected = match expected.to_str() {
+            Some("0") => false,
+            Some("1") => true,
+            _ => panic!("IRONRDP_BENCH_EXPECT_SIMD128 must be 0 or 1"),
+        };
+        assert_eq!(env::var("CARGO_CFG_TARGET_ARCH").as_deref(), Ok("wasm32"));
+        let enabled = env::var("CARGO_CFG_TARGET_FEATURE")
+            .unwrap_or_default()
+            .split(',')
+            .any(|feature| feature == "simd128");
+        assert_eq!(enabled, expected, "unexpected simd128 configuration");
     }
     let selected_variant = env::var("IRONRDP_BENCH_VARIANT");
     for variant in ["simd", "fused", "candidate"] {
