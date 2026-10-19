@@ -9,10 +9,12 @@ mod image;
 
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::Action;
+use ironrdp::pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
 use ironrdp::pdu::codecs::rfx::{self, Block, CodecChannel};
 use ironrdp::pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdatePdu, Fragmentation, UpdateCode};
-use ironrdp::pdu::geometry::{ExclusiveRectangle, InclusiveRectangle};
+use ironrdp::pdu::geometry::{ExclusiveRectangle, InclusiveRectangle, Rectangle as _};
 use ironrdp::pdu::surface_commands::{ExtendedBitmapDataPdu, SurfaceBitsPdu, SurfaceCommand};
+use ironrdp::session::fast_path::ProcessorBuilder;
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_core::{WriteBuf, encode_vec};
@@ -248,6 +250,109 @@ fn opaque_rows_append_and_reuse_without_mutating_a_transparent_framebuffer() {
                     .chunks_exact(4)
                     .all(|pixel| pixel == [0, 0, 0, 255])
             );
+            assert_eq!(source.data(), original);
+        }
+    }
+}
+
+#[test]
+fn expanded_opaque_rows_match_raw_extraction_and_preserve_sparse_source() {
+    for (width, dirty_width, below_threshold_height) in [
+        (1919, 1536, 34),
+        (1920, 1536, 34),
+        (1920, 1800, 34),
+        (1920, 1919, 34),
+        (1921, 1537, 34),
+        (3840, 3072, 17),
+        (3841, 3073, 17),
+    ] {
+        // Leave transparent borders around patterned opaque pixels. Expanded upload rows
+        // contain both kinds of alpha and RGB values that distinguish adjacent source rows.
+        let mut source = DecodedImage::new(PixelFormat::RgbA32, width, 96);
+        let painted = InclusiveRectangle {
+            left: 3,
+            top: 5,
+            right: width - 6,
+            bottom: 90,
+        };
+        let bitmap_data: Vec<u8> = (painted.top..=painted.bottom)
+            .rev()
+            .flat_map(|y| {
+                (painted.left..=painted.right).flat_map(move |x| {
+                    let [red, green, blue, _] = (u32::from(y) * u32::from(width) + u32::from(x)).to_le_bytes();
+                    [blue, green, red, 0]
+                })
+            })
+            .collect();
+        ProcessorBuilder {
+            io_channel_id: 0,
+            user_channel_id: 0,
+            share_id: 0,
+            enable_server_pointer: false,
+            pointer_software_rendering: false,
+        }
+        .build()
+        .process_bitmap_update(
+            &mut source,
+            BitmapUpdateData {
+                rectangles: vec![BitmapData {
+                    width: painted.width(),
+                    height: painted.height(),
+                    rectangle: painted,
+                    bits_per_pixel: 32,
+                    compression_flags: Compression::empty(),
+                    compressed_data_header: None,
+                    bitmap_data: &bitmap_data,
+                }],
+            },
+        )
+        .expect("populate sparse test framebuffer");
+        let original = source.data().to_vec();
+        let mut raw = WriteBuf::new();
+        let mut opaque = WriteBuf::new();
+        let prefix = [11, 23, 47];
+
+        // Exercise both sides of 256 KiB after widening, including odd row strides.
+        // The browser benchmark checks which preparation path Canvas actually selects.
+        for height in [below_threshold_height, below_threshold_height + 1] {
+            let left = if dirty_width == width - 1 { 1 } else { 7 };
+            let region = InclusiveRectangle {
+                left,
+                top: 11,
+                right: left + dirty_width - 1,
+                bottom: 11 + height - 1,
+            };
+            let expected_region = InclusiveRectangle {
+                left: 0,
+                right: width - 1,
+                ..region
+            };
+            let selected = image::select_upload_region(&source, region.clone());
+            assert_eq!(selected, expected_region);
+            raw.clear();
+            opaque.clear();
+            raw.write_slice(&prefix);
+            opaque.write_slice(&prefix);
+            assert_eq!(image::extract_partial_image(&source, region, &mut raw), expected_region);
+            assert!(raw.filled()[prefix.len()..].chunks_exact(4).any(|pixel| pixel[3] == 0));
+            assert!(
+                raw.filled()[prefix.len()..]
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[3] == 255)
+            );
+
+            // Apply the Canvas alpha contract independently of its SIMD/scalar helpers.
+            let mut expected = raw.filled().to_vec();
+            for pixel in expected[prefix.len()..].chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+            canvas::copy_opaque_rows(&source, &selected, &mut opaque);
+            assert_eq!(
+                opaque.filled_len(),
+                prefix.len() + usize::from(width) * usize::from(height) * 4
+            );
+            assert_eq!(opaque.filled(), expected);
+            assert_eq!(&opaque.filled()[..prefix.len()], &prefix);
             assert_eq!(source.data(), original);
         }
     }

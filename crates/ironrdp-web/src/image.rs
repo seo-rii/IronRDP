@@ -11,14 +11,28 @@ pub(crate) fn extract_partial_image(
     region: InclusiveRectangle,
     buffer: &mut WriteBuf,
 ) -> InclusiveRectangle {
+    let region = select_upload_region(image, region);
+    if region.left == 0 && region.width() == image.width() {
+        extract_whole_rows(image, region, buffer)
+    } else {
+        extract_smallest_rectangle(image, region, buffer)
+    }
+}
+
+/// Selects the upload coverage without copying or changing the framebuffer's pixels.
+pub(crate) fn select_upload_region(image: &DecodedImage, region: InclusiveRectangle) -> InclusiveRectangle {
     let prefer_contiguous_copy = 64 < region.height() || 512 < region.width();
     // Widen only when copying, alpha processing, and uploading at most 25% extra pixels.
     let acceptable_overdraw = u32::from(image.width()) * 4 <= u32::from(region.width()) * 5;
 
     if prefer_contiguous_copy && acceptable_overdraw {
-        extract_whole_rows(image, region, buffer)
+        InclusiveRectangle {
+            left: 0,
+            right: image.width() - 1,
+            ..region
+        }
     } else {
-        extract_smallest_rectangle(image, region, buffer)
+        region
     }
 }
 

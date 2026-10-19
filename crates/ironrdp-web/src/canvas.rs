@@ -11,7 +11,7 @@ use wasm_bindgen::{Clamped, JsCast as _};
 use web_sys::ImageData;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-use crate::image::extract_partial_image;
+use crate::image::{extract_partial_image, select_upload_region};
 
 /// Web render surface: blits each dirty region to the canvas with `put_image_data`.
 pub(crate) struct Canvas {
@@ -59,6 +59,8 @@ impl Canvas {
             return Ok(());
         };
 
+        // Fusion depends on the rows actually uploaded, including capped whole-row expansion.
+        let region = select_upload_region(image, region);
         if prefer_fused_copy(image, &region) {
             copy_opaque_rows(image, &region, buffer);
             self.blit(buffer.filled(), region)
@@ -119,8 +121,8 @@ pub(crate) fn copy_opaque_rows(image: &DecodedImage, region: &InclusiveRectangle
 
 #[expect(clippy::arithmetic_side_effects, reason = "two u16 dimensions fit in a wasm32 usize")]
 fn prefer_fused_copy(image: &DecodedImage, region: &InclusiveRectangle) -> bool {
-    // Avoid the per-row SIMD overhead observed for narrow updates. Small full-width updates
-    // also retain the existing path; this threshold is checked by the browser benchmark.
+    // Avoid the per-row SIMD overhead observed for narrow uploads. Small full-width uploads
+    // also retain the separate copy/alpha path; the threshold applies after selecting coverage.
     const MIN_FUSED_PIXELS: usize = 256 * 1024 / 4;
     region.left == 0
         && region.width() == image.width()
