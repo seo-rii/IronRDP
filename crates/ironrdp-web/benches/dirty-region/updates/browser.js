@@ -253,6 +253,38 @@ window.checkPacing = async () => {
     return results;
 };
 
+window.checkIdleTimers = async () => {
+    const results = [];
+    for (const terminate of [false, true]) {
+        const canvas = document.createElement("canvas");
+        // A longer interval isolates delivery/cancellation from cold Canvas startup cost.
+        const bench = new wasm.ReadyQueueBenchmark(canvas, "full", 320, 240, 4, 5);
+        try {
+            const [timerEvents, originalDelay, unchangedDelay, idleObservationMs, beforeIdle, afterIdle] =
+                await bench.probe_idle_timer(terminate);
+            const count = stats(bench);
+            if (timerEvents !== (terminate ? 0 : 1) || originalDelay !== unchangedDelay ||
+                beforeIdle !== 2 || afterIdle !== 2 || count.applied_updates !== 4 || count.draw_calls !== 2 ||
+                count.flush_batches !== 2 || count.forced_flushes !== 0 || count.max_queue !== 1 ||
+                count.terminal_flushes !== (terminate ? 1 : 0) ||
+                bench.pending_delay_ms(performance.now()) !== undefined) {
+                throw new Error(`idle timer probe failed: ${JSON.stringify(count)}`);
+            }
+            equal(bench.source_pixels(), bench.expected_pixels(), "idle timer applied all updates");
+            equal(pixels(canvas), bench.expected_pixels(), "idle timer final Canvas");
+            results.push({kind: terminate ? "termination_cancels_timer" : "idle_timer_flush",
+                interval_ms: 200, requested_followup_delay_ms: 10, handled_presentation_timer_events: timerEvents,
+                original_delay_ms: originalDelay, delay_at_same_timestamp_after_updates_ms: unchangedDelay,
+                idle_observation_ms: idleObservationMs, draws_before_idle: beforeIdle, draws_after_idle: afterIdle,
+                counts: count, rgba_equal: true, source_equal: true, pending_empty: true,
+                scope: "production presentation helpers with a synthetic Rust timeout/select driver; not the Session loop"});
+        } finally {
+            bench.free();
+        }
+    }
+    return results;
+};
+
 window.measurePacing = async ({name, pair, blockOrder = 0, fullUpdates = 96, narrowUpdates = 1024, partialUpdates = 16384}) => {
     const order = blockOrder % 2 ? [0, 1, 1, 0] : [1, 0, 0, 1];
     const observations = [];

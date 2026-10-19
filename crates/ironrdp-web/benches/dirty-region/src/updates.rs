@@ -541,6 +541,96 @@ impl ReadyQueueBenchmark {
         self.counts.draws - before
     }
 
+    /// Correctness-only probe for idle timer delivery and cancellation, not the Session loop.
+    pub async fn probe_idle_timer(&mut self, terminate: bool) -> Result<Vec<f64>, JsValue> {
+        let check = |condition, message: &str| {
+            if condition {
+                Ok(())
+            } else {
+                Err(JsValue::from_str(message))
+            }
+        };
+        check(
+            self.counts.updates == 0 && self.total == 4 && self.regions.len() == 1,
+            "idle timer probe requires a fresh four-update full-frame fixture",
+        )?;
+        check(
+            self.step(true) == 1,
+            "first idle-probe update was not presented immediately",
+        )?;
+        check(self.step(true) == 0, "second idle-probe update did not remain pending")?;
+        let reference_now = self.performance.now();
+        let original_delay = self
+            .pending_delay_ms(reference_now)
+            .ok_or_else(|| JsValue::from_str("idle-probe queue unexpectedly empty"))?;
+        check(original_delay > 10, "idle-probe deadline too close for follow-up input")?;
+        let mut presentation_timer = TimeoutFuture::new(original_delay).fuse();
+
+        // Let another update arrive while the presentation timer is pending. A 200 ms
+        // fixture interval leaves startup margin; this is not a 60 FPS timing sample.
+        select! {
+            _ = TimeoutFuture::new(10).fuse() => {},
+            _ = presentation_timer => {
+                return Err(JsValue::from_str("presentation deadline elapsed before follow-up input"));
+            }
+        }
+        check(self.step(true) == 0, "third idle-probe update unexpectedly presented")?;
+        check(self.step(true) == 0, "fourth idle-probe update unexpectedly presented")?;
+        let unchanged_delay = self.pending_delay_ms(reference_now);
+        check(
+            unchanged_delay == Some(original_delay),
+            "new updates extended the pending presentation deadline",
+        )?;
+        check(
+            !presentation_timer.is_terminated(),
+            "new updates cancelled the pending timer",
+        )?;
+
+        let mut timer_events = 0_u32;
+        if terminate {
+            // Mirror terminal presentation: cancel first, then flush the newest pixels.
+            presentation_timer = Fuse::terminated();
+            check(
+                self.finish(self.performance.now()) == 1,
+                "terminal flush missed pending pixels",
+            )?;
+        } else {
+            // No further input is ready: only the actual browser timeout can wake this branch.
+            select! {
+                _ = futures_util::future::pending::<()>().fuse() => {
+                    return Err(JsValue::from_str("idle input unexpectedly became ready"));
+                },
+                _ = presentation_timer => { timer_events += 1; }
+            }
+            presentation_timer = Fuse::terminated();
+            check(
+                self.flush_due(self.performance.now()) == 1,
+                "idle timer did not flush pending pixels",
+            )?;
+        }
+        check(self.pending.is_empty(), "idle-probe presentation left pending pixels")?;
+        let draws_before_idle = self.counts.draws;
+        let idle_observation_ms = original_delay + 20;
+        select! {
+            _ = presentation_timer => {
+                return Err(JsValue::from_str("cancelled presentation timer became ready"));
+            },
+            _ = TimeoutFuture::new(idle_observation_ms).fuse() => {}
+        }
+        check(
+            self.counts.draws == draws_before_idle && self.pending.is_empty(),
+            "presentation state changed after timer cancellation",
+        )?;
+        Ok(vec![
+            f64::from(timer_events),
+            f64::from(original_delay),
+            f64::from(unchanged_delay.expect("deadline checked above")),
+            f64::from(idle_observation_ms),
+            f64::from(draws_before_idle),
+            f64::from(self.counts.draws),
+        ])
+    }
+
     pub fn stats(&self) -> Vec<f64> {
         self.counts.values()
     }

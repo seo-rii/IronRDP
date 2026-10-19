@@ -92,6 +92,8 @@ async def session(playwright, args, url, package_url, plan, counts):
             result["yield_probe"] = await page.evaluate("() => window.probeYields(32)")
             result["packet_checks"] = await page.evaluate("() => window.checkPackets()")
             result["pacing_checks"] = await page.evaluate("() => window.checkPacing()")
+            if args.correctness_only:
+                result["idle_timer_checks"] = await page.evaluate("() => window.checkIdleTimers()")
         else:
             rows = []
             for name in plan["cases"]:
