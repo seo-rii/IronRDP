@@ -113,7 +113,8 @@ CSV. A PDU and a presentation batch remain atomic, so an 8 ms work budget is not
 an 8 ms callback or input-latency guarantee. Full-frame task markers ranged from
 38 to 47 ms despite yielding after each update.
 
-The 30 FPS comparison is exploratory; production currently defaults to 60 FPS:
+The 30 FPS comparison is exploratory. The measured candidate used 60 FPS;
+current production pacing is opt-in:
 
 | Workload | 30 FPS completion change | Exploratory 95% interval | Candidate draws |
 | --- | ---: | ---: | ---: |
