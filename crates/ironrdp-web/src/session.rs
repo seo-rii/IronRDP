@@ -42,7 +42,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlCanvasElement;
 
 use crate::browser_yield::BrowserYield;
-use crate::canvas::Canvas;
+use crate::canvas::{Canvas, clip_region};
 use crate::clipboard;
 use crate::clipboard::{ClipboardData, FileMetadata, WasmClipboard, WasmClipboardBackend, WasmClipboardBackendMessage};
 use crate::error::IronError;
@@ -614,17 +614,51 @@ pub(crate) struct Session {
     printer: RefCell<Option<Option<WasmPrinter>>>,
 }
 
+#[derive(Debug)]
+enum FlushReason {
+    Capacity,
+    Deadline,
+    Reactivation,
+    SessionEnd,
+}
+
+struct PresentationControl {
+    pacing: FramePacing,
+    timer: Fuse<TimeoutFuture>,
+    generation: u64,
+    oldest_pending_ms: Option<f64>,
+}
+
+impl PresentationControl {
+    fn new() -> Self {
+        Self {
+            pacing: FramePacing::default(),
+            timer: Fuse::terminated(),
+            generation: 0,
+            oldest_pending_ms: None,
+        }
+    }
+
+    fn replace_framebuffer(&mut self) {
+        self.timer = Fuse::terminated();
+        self.pacing.reset();
+        self.oldest_pending_ms = None;
+        self.generation = self.generation.saturating_add(1);
+    }
+}
+
 fn present_pending(
     gui: &Canvas,
     image: &DecodedImage,
     pending: &mut PendingRegions,
     draw_buffer: &mut WriteBuf,
-    pacing: &mut FramePacing,
-    timer: &mut Fuse<TimeoutFuture>,
+    control: &mut PresentationControl,
     performance: &web_sys::Performance,
+    reason: FlushReason,
 ) -> anyhow::Result<()> {
     // Cancel even an already-ready timer after a forced or lifecycle flush.
-    *timer = Fuse::terminated();
+    control.timer = Fuse::terminated();
+    let oldest_pending_ms = control.oldest_pending_ms.take();
     if pending.is_empty() {
         return Ok(());
     }
@@ -633,8 +667,19 @@ fn present_pending(
         gui.draw_image(image, region, buffer).context("draw updated region")
     });
     if stats.uploaded_bytes != 0 {
-        pacing.presented(started_ms);
+        control.pacing.presented(started_ms);
     }
+    trace!(
+        phase = "presentation",
+        ?reason,
+        generation = control.generation,
+        regions = stats.attempted_regions,
+        failed_regions = stats.failed_regions,
+        uploaded_bytes = stats.uploaded_bytes,
+        elapsed_ms = performance.now() - started_ms,
+        oldest_age_ms = ?oldest_pending_ms.map(|queued_ms| started_ms - queued_ms),
+        "Presented pending framebuffer regions"
+    );
     result
 }
 
@@ -728,17 +773,16 @@ impl iron_remote_desktop::Session for Session {
             connection_result.desktop_size.height,
         );
 
-        let mut requested_resize = None;
-
         // Reused across frames so per-region extraction doesn't allocate on every draw.
         let mut draw_buffer = WriteBuf::new();
         let mut pending_regions = PendingRegions::default();
-        let mut pacing = FramePacing::default();
-        let mut presentation_timer = Fuse::<TimeoutFuture>::terminated();
+        let mut presentation = PresentationControl::new();
         let performance = web_sys::window()
             .and_then(|window| window.performance())
             .context("browser performance clock unavailable")?;
-        let mut work_ms = 0.0;
+        // This budget starts after a selected read completes: framing/read-poll CPU work
+        // and activation traffic are excluded, as well as time waiting for network data.
+        let mut post_read_work_ms = 0.0;
         let mut browser_yield = BrowserYield::new()?;
 
         // We retain the factory to drive the Deactivation-Reactivation Sequence locally.
@@ -921,10 +965,6 @@ impl iron_remote_desktop::Session for Session {
                                     warn!("Resize event ignored: width or height is zero");
                                     Vec::new()
                                 } else if let Some(response_frame) = active_stage.encode_resize(width, height, scale_factor, physical_size) {
-                                    let width = NonZeroU32::new(width).expect("width is guaranteed to be non-zero due to the prior check");
-                                    let height = NonZeroU32::new(height).expect("height is guaranteed to be non-zero due to the prior check");
-
-                                    requested_resize = Some((width, height));
                                     vec![ActiveStageOutput::ResponseFrame(response_frame?)]
                                 } else {
                                     debug!("Resize event ignored");
@@ -971,7 +1011,7 @@ impl iron_remote_desktop::Session for Session {
                             Vec::new()
                         }
                     }
-                    _ = presentation_timer => {
+                    _ = &mut presentation.timer => {
                         work_started = performance.now();
                         Vec::new()
                     }
@@ -987,17 +1027,27 @@ impl iron_remote_desktop::Session for Session {
                                 .context("Send frame to writer task")?;
                         }
                         ActiveStageOutput::GraphicsUpdate(region) => {
-                            pending_regions.push_or_flush(region, &mut |pending| {
-                                present_pending(
-                                    &gui,
-                                    &image,
-                                    pending,
-                                    &mut draw_buffer,
-                                    &mut pacing,
-                                    &mut presentation_timer,
-                                    &performance,
-                                )
-                            })?;
+                            // Reject empty/inverted/offscreen damage before it can create a timer
+                            // or postpone the next real presentation.
+                            if let Some(region) = clip_region(&image, &region) {
+                                let queued = pending_regions.push_or_flush(region, &mut |pending| {
+                                    present_pending(
+                                        &gui,
+                                        &image,
+                                        pending,
+                                        &mut draw_buffer,
+                                        &mut presentation,
+                                        &performance,
+                                        FlushReason::Capacity,
+                                    )
+                                });
+                                // On overflow, push_or_flush preserves the new region even when
+                                // the batch failed. The final flush below must still attempt it.
+                                if presentation.oldest_pending_ms.is_none() {
+                                    presentation.oldest_pending_ms = Some(performance.now());
+                                }
+                                queued?;
+                            }
                         }
                         ActiveStageOutput::PointerDefault => {
                             self.set_cursor_style(CursorStyle::Default)?;
@@ -1114,21 +1164,13 @@ impl iron_remote_desktop::Session for Session {
                                 &image,
                                 &mut pending_regions,
                                 &mut draw_buffer,
-                                &mut pacing,
-                                &mut presentation_timer,
+                                &mut presentation,
                                 &performance,
+                                FlushReason::Reactivation,
                             )?;
-                            pacing.reset();
                             // Execute the Deactivation-Reactivation Sequence:
                             // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dfc234ce-481a-4674-9a5d-2a7bafb14432
                             debug!("Received Server Deactivate All PDU, executing Deactivation-Reactivation Sequence");
-
-                            // We need to perform resize after receiving the Deactivate All PDU, because there may be frames
-                            // with the previous dimensions arriving between the resize request and this message.
-                            if let Some((width, height)) = requested_resize {
-                                gui.resize(width, height);
-                                requested_resize = None;
-                            }
 
                             let mut connection_activation = activation_factory.create();
                             let mut buf = WriteBuf::new();
@@ -1154,7 +1196,10 @@ impl iron_remote_desktop::Session for Session {
                                 } = connection_activation.connection_activation_state()
                                 {
                                     debug!("Deactivation-Reactivation Sequence completed");
-                                    image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
+                                    let width = NonZeroU32::new(u32::from(desktop_size.width))
+                                        .context("reactivated desktop width is zero")?;
+                                    let height = NonZeroU32::new(u32::from(desktop_size.height))
+                                        .context("reactivated desktop height is zero")?;
                                     if !active_stage.reactivate(
                                         connection_activation.io_channel_id(),
                                         connection_activation.user_channel_id(),
@@ -1166,6 +1211,13 @@ impl iron_remote_desktop::Session for Session {
                                         return Err(IronError::from(anyhow::anyhow!("invalid static channel chunk size")));
                                     }
                                     active_stage.set_window_support_level(window_support_level);
+                                    // Use the negotiated size, including unsolicited server resizes.
+                                    // Even equal dimensions start a new framebuffer generation, so
+                                    // clear the Canvas instead of retaining pixels from the old image.
+                                    gui.resize(width, height);
+                                    image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
+                                    presentation.replace_framebuffer();
+                                    post_read_work_ms = 0.0;
                                     break 'activation_seq;
                                 }
                             }
@@ -1198,30 +1250,32 @@ impl iron_remote_desktop::Session for Session {
                     }
                 }
                 if !pending_regions.is_empty() {
-                    let delay = pacing.delay_ms(performance.now());
+                    let delay = presentation.pacing.delay_ms(performance.now());
                     if delay == 0 {
                         present_pending(
                             &gui,
                             &image,
                             &mut pending_regions,
                             &mut draw_buffer,
-                            &mut pacing,
-                            &mut presentation_timer,
+                            &mut presentation,
                             &performance,
+                            FlushReason::Deadline,
                         )?;
-                    } else if presentation_timer.is_terminated() {
+                    } else if presentation.timer.is_terminated() {
                         // Do not restart an existing timer as more updates arrive.
-                        presentation_timer = TimeoutFuture::new(delay).fuse();
+                        presentation.timer = TimeoutFuture::new(delay).fuse();
                     }
                 }
 
-                // A ready WebSocket can keep Rust futures running without allowing JS input/timer
-                // callbacks to run. Yield after roughly 8 ms of actual work, excluding network waits.
-                // One PDU and one presentation batch remain atomic, so this is not a hard time bound.
-                work_ms += performance.now() - work_started;
-                if work_ms >= 8.0 {
+                // This measures processing after a selected read, not total main-thread
+                // occupancy. Read/framing polls and activation are excluded.
+                // One PDU and one presentation batch remain atomic, so it is not a hard bound.
+                post_read_work_ms += performance.now() - work_started;
+                if post_read_work_ms >= 8.0 {
+                    trace!(phase = "post_read_processing", generation = presentation.generation,
+                        post_read_work_ms, "Yielding to browser tasks");
                     browser_yield.yield_now().await?;
-                    work_ms = 0.0;
+                    post_read_work_ms = 0.0;
                 }
             };
             Ok(disconnect_reason)
@@ -1235,9 +1289,9 @@ impl iron_remote_desktop::Session for Session {
             &image,
             &mut pending_regions,
             &mut draw_buffer,
-            &mut pacing,
-            &mut presentation_timer,
+            &mut presentation,
             &performance,
+            FlushReason::SessionEnd,
         );
         let disconnect_reason = finish_presentation(outcome, flushed.map_err(IronError::from))?;
 
