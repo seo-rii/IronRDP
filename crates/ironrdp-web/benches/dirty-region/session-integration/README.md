@@ -72,6 +72,9 @@ of uncommitted edits remain supported and are identified in the report.
 
 Both fixture packages check final RGBA bytes and these production paths:
 
+- Thin, non-square New Pointer updates survive browser cursor downscaling. The
+  callback's PNG dimensions, opaque pixels and hotspot are checked independently,
+  followed by another framebuffer update on the same connection.
 - A first sparse frame and a final update presented during idle, without another
   server PDU. The default creates no presentation timer; pacing uses one timer
   and leaves none armed after drawing.

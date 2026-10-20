@@ -13,7 +13,8 @@ from urllib.parse import quote, unquote, urlsplit
 from build import BENCH, HERE, checkout_state, digest, source_hashes, write_json
 
 
-CASES = {"idle-presentation", "timer-and-server-ready", "termination-flush", "termination-draw-error",
+CASES = {"cursor-1x64", "cursor-64x1", "cursor-1x32", "cursor-2x64", "cursor-3x64",
+         "idle-presentation", "timer-and-server-ready", "termination-flush", "termination-draw-error",
          "protocol-error-preserved", "draw-error-not-retried", "region-capacity-overflow",
          "region-capacity-66", "region-capacity-130", "overflow-error-preserves-region",
          "overflow-66-error-1", "overflow-66-error-32", "overflow-66-error-64",

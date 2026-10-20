@@ -124,9 +124,11 @@ function start(module, width = 64, height = 48) {
     clock.reset();
     const canvas = document.createElement("canvas");
     document.querySelector("main").replaceChildren(canvas);
-    const fixture = new module.SessionFixture(canvas, "ws://session-fixture.invalid/established", width, height);
+    const cursorUpdates = [];
+    const fixture = new module.SessionFixture(canvas, "ws://session-fixture.invalid/established", width, height,
+        (kind, data, hotspotX, hotspotY) => cursorUpdates.push({kind, data, hotspotX, hotspotY}));
     const state = {canvas, fixture, socket: sockets.at(-1), width, height, attempts: [], draws: 0, failDraw: false,
-        failAttempts: new Set(),
+        failAttempts: new Set(), cursorUpdates,
         expected: new Uint8ClampedArray(width * height * 4), channelStart: channels.length, outcome: null};
     observedCanvases.set(canvas, state);
     state.done = fixture.run().then(
@@ -196,6 +198,46 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
     const results = [];
     installEnvironment();
     try {
+        for (const [width, height, hotspotX, hotspotY, pngWidth, pngHeight, pngHotspotX, pngHotspotY] of [
+            [1, 64, 0, 63, 1, 32, 0, 31],
+            [64, 1, 63, 0, 32, 1, 31, 0],
+            [1, 32, 0, 31, 1, 32, 0, 31],
+            [2, 64, 1, 63, 1, 32, 0, 31],
+            [3, 64, 2, 63, 1, 32, 0, 31],
+        ]) {
+            const state = start(module); await task();
+            state.socket.push(module.session_fixture_pointer(width, height, hotspotX, hotspotY));
+            await until(() => state.cursorUpdates.length || state.outcome, "cursor callback");
+            assert(!state.outcome, `cursor ${width}x${height} terminated the session: ${JSON.stringify(state.outcome)}`);
+            assert(state.cursorUpdates.length === 1, "pointer update did not produce exactly one cursor callback");
+            const cursor = state.cursorUpdates[0];
+            assert(cursor.kind === "url" && cursor.data.startsWith("data:image/png;base64,"), "cursor is not a PNG URL");
+            const png = new Image();
+            png.src = cursor.data;
+            await png.decode();
+            assert(png.naturalWidth === pngWidth && png.naturalHeight === pngHeight,
+                `cursor ${width}x${height}: incorrect PNG dimensions`);
+            assert(cursor.hotspotX === pngHotspotX && cursor.hotspotY === pngHotspotY,
+                `cursor ${width}x${height}: incorrect scaled hotspot`);
+            assert(cursor.hotspotX < png.naturalWidth && cursor.hotspotY < png.naturalHeight,
+                "cursor hotspot lies outside its PNG");
+            const decoded = document.createElement("canvas");
+            decoded.width = pngWidth; decoded.height = pngHeight;
+            const context = decoded.getContext("2d");
+            context.drawImage(png, 0, 0);
+            const pixels = context.getImageData(0, 0, pngWidth, pngHeight).data;
+            const expectedPixels = new Uint8ClampedArray(pixels.length);
+            for (let offset = 0; offset < expectedPixels.length; offset += 4) {
+                expectedPixels.set([0xCC, 0x66, 0x33, 0xFF], offset);
+            }
+            same(pixels, expectedPixels, `cursor ${width}x${height} retains opaque RGB`);
+            assert(state.draws === 0 && clock.timeouts.size === 0, "pointer update created a framebuffer presentation");
+            check(state, "pointer leaves framebuffer untouched");
+            await first(module, state);
+            state.socket.push(module.session_fixture_disconnect());
+            results.push({case: `cursor-${width}x${height}`, png_width: png.naturalWidth, png_height: png.naturalHeight,
+                hotspot_x: cursor.hotspotX, hotspot_y: cursor.hotspotY, ...await finished(state)});
+        }
         {
             const state = start(module); await first(module, state); await second(module, state, expectedPacing);
             const received = state.socket.receivedFrames;

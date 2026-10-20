@@ -15,6 +15,7 @@ use ironrdp::pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
 use ironrdp::pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdatePdu, Fragmentation, UpdateCode};
 use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::pdu::mcs::{DisconnectProviderUltimatum, DisconnectReason, McsMessage, SendDataIndication};
+use ironrdp::pdu::pointer::{ColorPointerAttribute, Point16, PointerAttribute};
 use ironrdp::pdu::rdp::capability_sets::{Bitmap, BitmapDrawingFlags, CapabilitySet, DemandActive, ServerDemandActive};
 use ironrdp::pdu::rdp::finalization_messages::FontPdu;
 use ironrdp::pdu::rdp::headers::{
@@ -42,7 +43,13 @@ impl SessionFixture {
     /// Supplies an already-established connection. The browser provides scripted WebSocket events;
     /// framing, decoding, presentation, input dispatch and session cleanup are production code.
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: web_sys::HtmlCanvasElement, url: &str, width: u16, height: u16) -> Result<Self, JsValue> {
+    pub fn new(
+        canvas: web_sys::HtmlCanvasElement,
+        url: &str,
+        width: u16,
+        height: u16,
+        cursor_callback: Option<js_sys::Function>,
+    ) -> Result<Self, JsValue> {
         if width == 0 || height == 0 {
             return Err(JsValue::from_str("fixture dimensions must be nonzero"));
         }
@@ -67,7 +74,7 @@ impl SessionFixture {
             static_channels: Default::default(),
             desktop_size,
             input_flags: ironrdp::pdu::rdp::capability_sets::InputFlags::empty(),
-            enable_server_pointer: false,
+            enable_server_pointer: true,
             pointer_software_rendering: false,
             refresh_rect_support: false,
             suppress_output_support: false,
@@ -88,7 +95,7 @@ impl SessionFixture {
                 writer_tx,
                 input_events_tx,
                 render_canvas: canvas,
-                set_cursor_style_callback: js_sys::Function::new_no_args(""),
+                set_cursor_style_callback: cursor_callback.unwrap_or_else(|| js_sys::Function::new_no_args("")),
                 set_cursor_style_callback_context: JsValue::NULL,
                 input_events_rx: RefCell::new(Some(input_events_rx)),
                 connection_result: RefCell::new(Some(connection_result)),
@@ -189,6 +196,42 @@ fn fast_path(payload: &[u8]) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn session_fixture_bitmap(left: u16, top: u16, width: u16, height: u16, color: u32) -> Result<Vec<u8>, JsValue> {
     fast_path(&bitmap_update(left, top, width, height, color)?)
+}
+
+#[wasm_bindgen]
+#[expect(clippy::arithmetic_side_effects, reason = "fixture dimensions are bounded to 1..=96")]
+pub fn session_fixture_pointer(width: u16, height: u16, hotspot_x: u16, hotspot_y: u16) -> Result<Vec<u8>, JsValue> {
+    if !(1..=96).contains(&width) || !(1..=96).contains(&height) || hotspot_x >= width || hotspot_y >= height {
+        return Err(JsValue::from_str("invalid fixture pointer dimensions or hotspot"));
+    }
+    // MS-RDPBCGR New Pointer: bottom-up BGRA with 16-bit aligned mask scanlines.
+    // Solid color keeps the PNG oracle independent of orientation and resampling.
+    let pixels = [0x33, 0x66, 0xCC, 0xFF].repeat(usize::from(width) * usize::from(height));
+    let and_mask = vec![0; usize::from(width).div_ceil(16) * 2 * usize::from(height)];
+    let pointer = encode_vec(&PointerAttribute {
+        xor_bpp: 32,
+        color_pointer: ColorPointerAttribute {
+            cache_index: 0,
+            hot_spot: Point16 {
+                x: hotspot_x,
+                y: hotspot_y,
+            },
+            width,
+            height,
+            xor_mask: &pixels,
+            and_mask: &and_mask,
+        },
+    })
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let update = encode_vec(&FastPathUpdatePdu {
+        fragmentation: Fragmentation::Single,
+        update_code: UpdateCode::NewPointer,
+        compression_flags: None,
+        compression_type: None,
+        data: &pointer,
+    })
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    fast_path(&update)
 }
 
 #[wasm_bindgen]

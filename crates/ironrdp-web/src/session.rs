@@ -1099,10 +1099,14 @@ impl iron_remote_desktop::Session for Session {
 
                             let (png_width, png_height, hotspot_x, hotspot_y, rgba_buffer) = if let Some(scale) = scale {
                                 // Per invariants: Following conversions will never saturate.
-                                let scaled_width = f64_to_u16_saturating_cast(f64::from(pointer.width) * scale);
-                                let scaled_height = f64_to_u16_saturating_cast(f64::from(pointer.height) * scale);
-                                let hotspot_x = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_x) * scale);
-                                let hotspot_y = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_y) * scale);
+                                // Thin, non-square pointers must retain at least one pixel on
+                                // each axis. Clamp the hotspot to the rounded destination too.
+                                let scaled_width = f64_to_u16_saturating_cast(f64::from(pointer.width) * scale).max(1);
+                                let scaled_height = f64_to_u16_saturating_cast(f64::from(pointer.height) * scale).max(1);
+                                let hotspot_x = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_x) * scale)
+                                    .min(scaled_width.saturating_sub(1));
+                                let hotspot_y = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_y) * scale)
+                                    .min(scaled_height.saturating_sub(1));
 
                                 // Per invariants: scaled_width * scaled_height * 4 <= 32 * 32 * 4 < usize::MAX
                                 #[expect(clippy::arithmetic_side_effects)]
