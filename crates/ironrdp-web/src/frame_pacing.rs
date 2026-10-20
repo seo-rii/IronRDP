@@ -1,5 +1,21 @@
 use core::time::Duration;
 
+/// Optional experiments; the default only coalesces updates from the same PDU.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PresentationConfig {
+    pub(crate) interval: Option<Duration>,
+    pub(crate) yield_budget: Option<Duration>,
+}
+
+impl PresentationConfig {
+    pub(crate) fn experimental() -> Self {
+        Self {
+            interval: Some(Duration::from_nanos(16_666_667)),
+            yield_budget: Some(Duration::from_millis(8)),
+        }
+    }
+}
+
 /// Limits presentation frequency without postponing the deadline when more updates arrive.
 ///
 /// Callers supply finite, monotonic milliseconds from the same clock, and only wait when dirty

@@ -3,7 +3,12 @@
 Measured on 2026-10-19. Removing duplicate/contained notifications reduces
 Canvas submission time. Pacing improves browser task responsiveness in a ready
 backlog, but increases completion time, especially when no rectangles can be
-removed. The pacing policy remains an experiment for fork review.
+removed. The pacing policy remains an experiment for fork review. Current production now
+uses only within-PDU coalescing by default; the slower paced policy requires the
+`experimental-presentation-pacing` Cargo feature. These archived numbers describe
+the revisions below, before the later clipping, best-effort draw-error handling,
+negotiated framebuffer-generation reset and Session trace events. They are not a
+new performance measurement of the revised Session loop.
 
 These results build on the [dirty-region cap](../RESULTS.md) and
 [conditional full-width copy fusion](../presentation/LARGE_COPY_RESULTS.md).

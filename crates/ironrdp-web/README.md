@@ -88,27 +88,54 @@ The browser runner currently requires Linux for its `/proc/stat` host counters.
 
 ## Canvas presentation
 
-All RDP updates are applied to the framebuffer. Canvas presentation combines
-pending regions and targets 60 FPS, with an immediate first update. Duplicate
-regions and regions fully contained in another pending region need only one draw;
-disjoint and partially overlapping regions retain their original coverage.
-The queue holds at most 64 regions and flushes before overflowing.
+All RDP updates are applied to the framebuffer. By default, Canvas presentation
+coalesces duplicate and contained regions from the same PDU and flushes at its
+end. Disjoint and partially overlapping regions retain their original coverage.
+Regions are clipped before entering the queue; invisible and reversed bounds do
+not create presentation deadlines. The queue holds at most 64 regions and
+flushes before overflowing.
 
-Only pending draws schedule a presentation timer. Additional updates do not
-restart its deadline. Reactivation flushes the old framebuffer before replacing
-it and resets the first-update deadline. Termination flushes the final pending
-regions; errors attempt the same flush while preserving the original error.
-These lifecycle and capacity flushes can occur before the normal frame deadline,
-so 60 FPS is a presentation target rather than a strict Canvas-call limit.
+A flush attempts every queued region even if an earlier draw failed, clears the
+scratch buffer after every attempt, and returns the first error. The overflowing
+65th region is queued even when that capacity flush failed, so the final flush
+can still attempt it. Termination and errors perform a best-effort final flush;
+an existing protocol/input error takes precedence over a final drawing error.
 
-The session yields to browser tasks after about 8 ms of accumulated processing
-work, using a reusable `MessageChannel`. Network waits do not consume that budget.
-Each PDU and presentation batch remains atomic, so this does not bound individual
-long tasks or guarantee a maximum input latency. Protocol responses and cursor
-callbacks do not wait for the presentation timer.
+Reactivation flushes the old framebuffer and cancels its timer before the
+activation exchange. After negotiation, both the Canvas and framebuffer use the
+server's final dimensions, including server-initiated or adjusted sizes. A new
+framebuffer generation clears the Canvas even when its dimensions are unchanged,
+resets pacing, and presents its first visible update immediately. The activation
+exchange still awaits server traffic without selecting input events, so shutdown
+requested during an unanswered activation exchange remains deferred. This change
+does not add an activation timeout or restructure that protocol state machine.
 
-Synthetic correctness and performance checks live in
-[`benches/dirty-region/updates`](benches/dirty-region/updates/README.md).
+Cross-PDU pacing and cooperative yielding are **disabled by default**. The Cargo
+feature `experimental-presentation-pacing` explicitly selects a 60 FPS target and
+an 8 ms processing budget for live-session experiments. No JavaScript API changes
+are required. For an experimental WASM build, add
+`--features experimental-presentation-pacing` to `wasm-pack build --target web`,
+using the SIMD flags described above if desired. `PresentationConfig` keeps the
+presentation interval and yield budget as separate internal options.
 
+Only pending visible draws schedule a timer, and later updates do not restart
+its deadline. Lifecycle and capacity flushes can occur before the deadline, so
+60 FPS is a target rather than a strict Canvas-call limit. Yielding uses a reusable
+`MessageChannel` after the configured amount of **post-read processing**: RDP
+decode, output handling and Canvas work after a read has completed. Network waits,
+CPU work performed while polling/framing reads, and activation work are excluded.
+A PDU and a presentation batch remain atomic; the budget does not bound long tasks
+or guarantee input latency. Responses and cursor callbacks remain immediate.
+
+Trace events report presentation reason, framebuffer generation, attempted and
+failed regions, successfully uploaded bytes, batch duration and oldest pending
+age. Optional yield events report the accumulated post-read processing time.
+Timing claims must state whether trace logging was enabled; the recorded synthetic
+benchmarks predate these events and do not measure the full Session loop.
+
+Synthetic checks and archived measurements live in
+[`benches/dirty-region/updates`](benches/dirty-region/updates/README.md). The earlier
+paced unique-tile workload took longer to finish, so pacing remains opt-in and
+this change does not claim to resolve live-video backlog or input latency.
 
 [IronRDP]: https://github.com/Devolutions/IronRDP

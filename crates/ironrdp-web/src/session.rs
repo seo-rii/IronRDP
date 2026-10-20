@@ -46,7 +46,7 @@ use crate::canvas::{Canvas, clip_region};
 use crate::clipboard;
 use crate::clipboard::{ClipboardData, FileMetadata, WasmClipboard, WasmClipboardBackend, WasmClipboardBackendMessage};
 use crate::error::IronError;
-use crate::frame_pacing::FramePacing;
+use crate::frame_pacing::{FramePacing, PresentationConfig};
 use crate::input::InputTransaction;
 use crate::network_client::WasmNetworkClient;
 use crate::presentation::{PendingRegions, finish_presentation};
@@ -617,6 +617,7 @@ pub(crate) struct Session {
 #[derive(Debug)]
 enum FlushReason {
     Capacity,
+    Pdu,
     Deadline,
     Reactivation,
     SessionEnd,
@@ -630,9 +631,9 @@ struct PresentationControl {
 }
 
 impl PresentationControl {
-    fn new() -> Self {
+    fn new(config: PresentationConfig) -> Self {
         Self {
-            pacing: FramePacing::default(),
+            pacing: FramePacing::new(config.interval.unwrap_or(Duration::ZERO)),
             timer: Fuse::terminated(),
             generation: 0,
             oldest_pending_ms: None,
@@ -776,14 +777,19 @@ impl iron_remote_desktop::Session for Session {
         // Reused across frames so per-region extraction doesn't allocate on every draw.
         let mut draw_buffer = WriteBuf::new();
         let mut pending_regions = PendingRegions::default();
-        let mut presentation = PresentationControl::new();
+        let config = if cfg!(feature = "experimental-presentation-pacing") {
+            PresentationConfig::experimental()
+        } else {
+            PresentationConfig::default()
+        };
+        let mut presentation = PresentationControl::new(config);
         let performance = web_sys::window()
             .and_then(|window| window.performance())
             .context("browser performance clock unavailable")?;
         // This budget starts after a selected read completes: framing/read-poll CPU work
         // and activation traffic are excluded, as well as time waiting for network data.
         let mut post_read_work_ms = 0.0;
-        let mut browser_yield = BrowserYield::new()?;
+        let mut browser_yield = config.yield_budget.map(|_| BrowserYield::new()).transpose()?;
 
         // We retain the factory to drive the Deactivation-Reactivation Sequence locally.
         let activation_factory = connection_result.activation_factory;
@@ -1259,7 +1265,7 @@ impl iron_remote_desktop::Session for Session {
                             &mut draw_buffer,
                             &mut presentation,
                             &performance,
-                            FlushReason::Deadline,
+                            if config.interval.is_some() { FlushReason::Deadline } else { FlushReason::Pdu },
                         )?;
                     } else if presentation.timer.is_terminated() {
                         // Do not restart an existing timer as more updates arrive.
@@ -1267,15 +1273,17 @@ impl iron_remote_desktop::Session for Session {
                     }
                 }
 
-                // This measures processing after a selected read, not total main-thread
-                // occupancy. Read/framing polls and activation are excluded.
+                // Optional experiment: this measures processing after a selected read, not
+                // total main-thread occupancy. Read/framing polls and activation are excluded.
                 // One PDU and one presentation batch remain atomic, so it is not a hard bound.
-                post_read_work_ms += performance.now() - work_started;
-                if post_read_work_ms >= 8.0 {
-                    trace!(phase = "post_read_processing", generation = presentation.generation,
-                        post_read_work_ms, "Yielding to browser tasks");
-                    browser_yield.yield_now().await?;
-                    post_read_work_ms = 0.0;
+                if let (Some(budget), Some(browser_yield)) = (config.yield_budget, &mut browser_yield) {
+                    post_read_work_ms += performance.now() - work_started;
+                    if post_read_work_ms >= budget.as_secs_f64() * 1_000.0 {
+                        trace!(phase = "post_read_processing", generation = presentation.generation,
+                            post_read_work_ms, "Yielding to browser tasks");
+                        browser_yield.yield_now().await?;
+                        post_read_work_ms = 0.0;
+                    }
                 }
             };
             Ok(disconnect_reason)

@@ -5,6 +5,14 @@ This auxiliary feature uses the real `Canvas`, `PendingRegions`, and
 decoding, compositor completion, or transported input latency. Historical
 dirty-region and presentation benchmarks retain their existing feature modes.
 
+Current production defaults coalesce only within a PDU; cross-PDU pacing and
+cooperative yielding require `experimental-presentation-pacing`. The `paced60`
+and `paced30` synthetic cases below explicitly construct their pacing interval
+and still exercise the opt-in experiment. They are not the default Session
+policy. Current production additionally clips queued regions, attempts every
+draw after a failure, and resets Canvas generations to negotiated dimensions;
+the archived timings predate those lifecycle and error-path changes.
+
 [Recorded results and tradeoffs](RESULTS.md) include all case summaries, A/A
 controls, timing observations and the exact measured harness revision.
 
@@ -65,7 +73,8 @@ framebuffers alternate; only the declared dirty pixels differ. `baseline` draws
 each notification. `coalesced` passes the same notifications through production
 `PendingRegions`, flushes at a barrier/end, and on overflow flushes then draws the
 returned region directly, as in the isolated PDU-coalescing change at `a14d304e`.
-The later pacing change keeps updates across PDUs and requeues the overflow region.
+The opt-in pacing mode keeps updates across PDUs. Current production requeues the
+overflow region in both modes and preserves it if a capacity draw fails.
 
 | Case | Notifications | Baseline draws | Coalesced draws |
 | --- | ---: | ---: | ---: |
@@ -93,7 +102,11 @@ each step applies one synthetic uncompressed bitmap through the existing public
 bitmap-update API. A separate reference framebuffer receives the full sequence
 before timing. Final source and Canvas bytes must match it, and applied-update
 counts must match the requested total. This is a synthetic framebuffer workload,
-not a measurement of a live RDP decoder or session.
+not a measurement of a live RDP decoder or session. Production's optional yield
+budget measures post-read processing; it excludes read/framing polling CPU work
+and activation, as well as network waits. The synthetic ready-input loop does
+not reproduce those omitted costs. The recorded runs do not enable Session trace
+logging and predate the new phase/generation presentation trace events.
 
 `baseline` presents every update synchronously. `paced60` and `paced30` use actual
 `FramePacing` deadlines, begin with an immediate presentation, retain all pending

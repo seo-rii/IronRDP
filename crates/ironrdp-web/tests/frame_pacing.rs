@@ -5,7 +5,27 @@ use core::time::Duration;
 #[path = "../src/frame_pacing.rs"]
 mod frame_pacing;
 
-use frame_pacing::FramePacing;
+use frame_pacing::{FramePacing, PresentationConfig};
+
+#[test]
+fn default_presentation_has_no_cross_pdu_delay_or_cooperative_yield() {
+    let config = PresentationConfig::default();
+    assert!(config.interval.is_none());
+    assert!(config.yield_budget.is_none());
+    let mut pacing = FramePacing::new(config.interval.unwrap_or(Duration::ZERO));
+    pacing.presented(100.0);
+    assert_eq!(pacing.delay_ms(100.0), 0);
+}
+
+#[test]
+fn experimental_presentation_explicitly_selects_sixty_fps_and_a_processing_budget() {
+    let config = PresentationConfig::experimental();
+    assert_eq!(config.interval, Some(Duration::from_nanos(16_666_667)));
+    assert_eq!(config.yield_budget, Some(Duration::from_millis(8)));
+    let mut pacing = FramePacing::new(config.interval.expect("experimental pacing is enabled"));
+    pacing.presented(100.0);
+    assert_eq!(pacing.delay_ms(100.0), 17);
+}
 
 #[test]
 fn frame_pacing_draws_the_first_update_and_updates_after_idle_immediately() {
