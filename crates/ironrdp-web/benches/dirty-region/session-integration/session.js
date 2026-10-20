@@ -40,17 +40,24 @@ class ScriptedWebSocket extends EventTarget {
         super();
         this.url = url; this.readyState = 1; this.binaryType = "arraybuffer";
         this.bufferedAmount = 0; this.extensions = ""; this.protocol = ""; this.sent = []; this.receivedFrames = 0;
+        this.events = []; this.closeCalls = 0;
         sockets.push(this);
         queueMicrotask(() => this.dispatchEvent(new Event("open")));
     }
     // gloo-net sends Blob objects. Retain the actual write without asynchronous conversion.
-    send(data) { this.sent.push(data); }
+    send(data) {
+        assert(this.readyState === ScriptedWebSocket.OPEN, "writer sent after its WebSocket closed");
+        this.sent.push(data);
+        this.events.push({kind: "send", sent: this.sent.length});
+    }
     push(bytes) {
         this.receivedFrames++;
         this.dispatchEvent(new MessageEvent("message", {data: Uint8Array.from(bytes).buffer}));
     }
     close() {
+        this.closeCalls++;
         if (this.readyState === 3) return;
+        this.events.push({kind: "close", sent: this.sent.length});
         this.readyState = 3;
         queueMicrotask(() => this.dispatchEvent(new CloseEvent("close", {code: 1000, wasClean: true})));
     }
@@ -120,9 +127,12 @@ async function until(predicate, label) {
     }
     throw new Error(`session did not reach ${label}`);
 }
-function start(module, width = 64, height = 48) {
+function start(module, width = 64, height = 48, options = {}) {
     clock.reset();
     const canvas = document.createElement("canvas");
+    if (options.failCanvasContext) {
+        canvas.getContext = () => { throw new Error("session-fixture-canvas-context-failure"); };
+    }
     document.querySelector("main").replaceChildren(canvas);
     const cursorUpdates = [];
     const fixture = new module.SessionFixture(canvas, "ws://session-fixture.invalid/established", width, height,
@@ -175,6 +185,10 @@ async function finished(state, expectedError = null) {
     } else {
         assert(state.outcome.ok, `unexpected session failure: ${JSON.stringify(state.outcome)}`);
     }
+    // Keep the Session object alive: freeing it here would hide a writer that only
+    // releases its WebSocket when the UI eventually discards the Session.
+    await until(() => state.socket.readyState === ScriptedWebSocket.CLOSED, "WebSocket close before Session free");
+    assert(state.socket.closeCalls === 1, "run completion did not close its WebSocket exactly once");
     assert(clock.timeouts.size === 0 && clock.intervals.size === 0, "completed session left timers alive");
     const draws = state.attempts.length;
     clock.advance(1000);
@@ -185,9 +199,11 @@ async function finished(state, expectedError = null) {
     }
     state.fixture.free();
     await task();
+    assert(state.socket.closeCalls === 1, "freeing a completed Session closed its WebSocket again");
     return {outcome: state.outcome, draw_attempts: draws, successful_uploads: state.draws,
         canceled_timers: clock.canceled, fired_timers: clock.fired,
-        canceled_cleanup_intervals: clock.canceledIntervals, received_frames: state.socket.receivedFrames};
+        canceled_cleanup_intervals: clock.canceledIntervals, received_frames: state.socket.receivedFrames,
+        socket_closed_before_free: true, socket_close_calls: state.socket.closeCalls, outbound_frames: state.socket.sent.length};
 }
 
 window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
@@ -237,6 +253,42 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
             state.socket.push(module.session_fixture_disconnect());
             results.push({case: `cursor-${width}x${height}`, png_width: png.naturalWidth, png_height: png.naturalHeight,
                 hotspot_x: cursor.hotspotX, hotspot_y: cursor.hotspotY, ...await finished(state)});
+        }
+        {
+            const state = start(module, 64, 48, {failCanvasContext: true});
+            const result = await finished(state, "session-fixture-canvas-context-failure");
+            assert(state.attempts.length === 0 && state.socket.sent.length === 0,
+                "Canvas initialization failure performed session work");
+            results.push({case: "canvas-init-error-closes-writer", ...result});
+        }
+        {
+            const state = start(module); await first(module, state);
+            let secondRunError = null;
+            try { await state.fixture.run_again(); } catch (error) { secondRunError = String(error); }
+            assert(secondRunError?.includes("RDP session can be started only once"), "second run was not rejected");
+            assert(!state.outcome && state.socket.readyState === ScriptedWebSocket.OPEN,
+                "rejected second run closed the running session");
+            await second(module, state, expectedPacing);
+            clock.advance(20); await task();
+            if (expectedPacing) paint(state, 8, 3, 3, 3, 0x22CC44);
+            check(state, "first run continues after second run rejected");
+            state.socket.push(module.session_fixture_disconnect());
+            results.push({case: "second-run-preserves-active-writer", ...await finished(state)});
+        }
+        {
+            const state = start(module); await first(module, state);
+            const writes = state.socket.sent.length;
+            // Wake the session first, then queue a write without letting the writer run.
+            // Closing its channel must preserve this frame for the writer to drain.
+            state.socket.push(module.session_fixture_disconnect());
+            state.fixture.synchronize_lock_keys();
+            assert(state.socket.sent.length === writes, "writer drain fixture yielded before queuing its frame");
+            const result = await finished(state);
+            assert(state.socket.sent.length === writes + 1, "run completion discarded a queued outgoing frame");
+            const lastEvents = state.socket.events.slice(-2);
+            assert(lastEvents[0]?.kind === "send" && lastEvents[1]?.kind === "close"
+                && lastEvents[1].sent === writes + 1, "WebSocket closed before its queued frame was sent");
+            results.push({case: "writer-drains-queued-frame", ...result});
         }
         {
             const state = start(module); await first(module, state); await second(module, state, expectedPacing);

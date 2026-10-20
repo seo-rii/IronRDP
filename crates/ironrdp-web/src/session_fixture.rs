@@ -119,6 +119,21 @@ impl SessionFixture {
         }
     }
 
+    /// Exercises the production single-run guard without replacing the first run's abort handle.
+    pub async fn run_again(&self) -> Result<String, JsValue> {
+        self.session
+            .run()
+            .await
+            .map(|info| info.reason())
+            .map_err(|error| JsValue::from_str(&error.backtrace()))
+    }
+
+    pub fn synchronize_lock_keys(&self) -> Result<(), JsValue> {
+        self.session
+            .synchronize_lock_keys(false, false, false, false)
+            .map_err(|error| JsValue::from_str(&error.backtrace()))
+    }
+
     /// Cancels the actual run future, exercising the production timer/MessageChannel Drop paths.
     pub fn abort(&self) {
         if let Some(handle) = self.abort.borrow().as_ref() {

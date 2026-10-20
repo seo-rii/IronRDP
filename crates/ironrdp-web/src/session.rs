@@ -736,6 +736,9 @@ impl iron_remote_desktop::Session for Session {
             .borrow_mut()
             .take()
             .context("RDP session can be started only once")?;
+        // Only the run that owns the reader may stop the writer. Close on every exit,
+        // including initialization errors and cancellation, while draining queued responses.
+        let _writer_cleanup = CloseWriterOnDrop(&self.writer_tx);
 
         let mut input_events = self
             .input_events_rx
@@ -1730,6 +1733,16 @@ fn build_config(
         work_dir: String::new(),
         remote_application_mode: false,
         rail_support_level: ironrdp::pdu::rdp::capability_sets::RailSupportLevel::SUPPORTED,
+    }
+}
+
+struct CloseWriterOnDrop<'a>(&'a mpsc::UnboundedSender<Vec<u8>>);
+
+impl Drop for CloseWriterOnDrop<'_> {
+    fn drop(&mut self) {
+        // Closing the channel wakes the writer and preserves already-enqueued frames.
+        // Once both halves are dropped, WebSocket closes the underlying connection.
+        self.0.close_channel();
     }
 }
 

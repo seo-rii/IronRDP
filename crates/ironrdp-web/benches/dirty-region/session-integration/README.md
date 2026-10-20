@@ -98,12 +98,17 @@ Both fixture packages check final RGBA bytes and these production paths:
 - Cancellation while the real deactivation/reactivation sequence is waiting for
   the server. The prior pending update is presented, its timer is canceled, and
   dropping the suspended run future releases the remaining browser callbacks.
+- Writer shutdown on initialization failure, normal termination, processing
+  errors and cancellation, before freeing the retained Session object. Already
+  queued outgoing frames must be sent before the socket closes. A rejected
+  second `run()` must leave the first run's connection usable.
 - An unsolicited negotiated resize followed by another activation with equal
   dimensions. Each new framebuffer generation clears old Canvas pixels, cancels
   the preceding timer, and presents its first sparse update immediately.
 
-Every completed session checks for remaining timers, MessageChannel handlers and
-uploads after completion. `report.json` contains each case's outcome, upload
+Every completed session checks socket closure before freeing the Session,
+remaining timers, MessageChannel handlers and uploads after completion.
+`report.json` contains each case's outcome, upload
 attempts, successful uploads and timer counts. The
 [`Web Session correctness`](../../../../../.github/workflows/web-session-correctness.yml)
 workflow builds the current PR head, runs all three packages, and retains the
