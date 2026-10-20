@@ -13,7 +13,18 @@ mod image;
 #[path = "../src/presentation.rs"]
 mod presentation;
 
-use presentation::PendingRegions;
+use presentation::{PendingRegions, finish_presentation};
+
+#[derive(Debug, PartialEq, Eq)]
+struct DrawFailure(usize);
+
+impl core::fmt::Display for DrawFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "draw {} failed", self.0)
+    }
+}
+
+impl core::error::Error for DrawFailure {}
 
 fn rectangle(left: u16, top: u16, width: u16, height: u16) -> InclusiveRectangle {
     InclusiveRectangle {
@@ -204,4 +215,99 @@ fn extraction_thresholds_preserve_the_opaque_pixels_on_a_sparse_canvas() {
             }
         }
     }
+}
+
+#[test]
+fn failed_draws_do_not_skip_later_regions_and_every_attempt_clears_the_buffer() {
+    for failures in [vec![], vec![0], vec![2], vec![3], vec![1, 2, 3]] {
+        let mut pending = PendingRegions::default();
+        for x in [0, 2, 4, 6] {
+            assert!(pending.push(rectangle(x, 0, 1, 1)).is_none());
+        }
+        let mut buffer = WriteBuf::new();
+        let mut attempted = Vec::new();
+        let (stats, result) = pending.flush(&mut buffer, &mut |region, buffer| {
+            let index = usize::from(region.left / 2);
+            assert_eq!(buffer.filled_len(), 0, "previous draw left scratch bytes");
+            buffer.write_slice(&[1, 2, 3, 255]);
+            attempted.push(index);
+            if failures.contains(&index) {
+                Err(anyhow::Error::new(DrawFailure(index)).context("draw updated region"))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(attempted, [0, 1, 2, 3]);
+        assert!(pending.is_empty());
+        assert_eq!(buffer.filled_len(), 0);
+        assert_eq!(stats.attempted_regions, 4);
+        assert_eq!(stats.failed_regions, failures.len());
+        assert_eq!(
+            stats.uploaded_bytes,
+            u64::try_from(4 - failures.len()).expect("small count") * 4
+        );
+        if let Some(&first) = failures.first() {
+            let error = result.expect_err("draw failure is propagated");
+            assert_eq!(error.downcast_ref::<DrawFailure>(), Some(&DrawFailure(first)));
+            assert_eq!(error.root_cause().to_string(), format!("draw {first} failed"));
+        } else {
+            result.expect("all draws succeeded");
+        }
+    }
+}
+
+#[test]
+fn overflow_survives_a_failed_capacity_flush_for_the_final_attempt() {
+    let mut pending = PendingRegions::default();
+    for index in 0..PendingRegions::CAPACITY {
+        let x = u16::try_from(index * 2).expect("small coordinate");
+        assert!(pending.push(rectangle(x, 0, 1, 1)).is_none());
+    }
+    let mut buffer = WriteBuf::new();
+    let mut attempted = Vec::new();
+    let overflow_result = pending.push_or_flush(rectangle(128, 0, 1, 1), &mut |pending| {
+        let (_, result) = pending.flush(&mut buffer, &mut |region, buffer| {
+            assert_eq!(buffer.filled_len(), 0);
+            buffer.write_slice(&[1, 2, 3, 255]);
+            let index = usize::from(region.left / 2);
+            attempted.push(index);
+            if index == 7 || index == 63 {
+                Err(DrawFailure(index).into())
+            } else {
+                Ok(())
+            }
+        });
+        result
+    });
+    assert_eq!(attempted, (0..64).collect::<Vec<_>>());
+    assert_eq!(buffer.filled_len(), 0);
+    assert!(!pending.is_empty(), "the 65th region must still be queued");
+    let (_, final_result) = pending.flush(&mut buffer, &mut |region, buffer| {
+        assert_eq!(buffer.filled_len(), 0);
+        attempted.push(usize::from(region.left / 2));
+        buffer.write_slice(&[4, 5, 6, 255]);
+        Err(DrawFailure(64).into())
+    });
+    let error = finish_presentation(overflow_result, final_result).expect_err("first draw failure wins");
+    assert_eq!(error.downcast_ref::<DrawFailure>(), Some(&DrawFailure(7)));
+    assert_eq!(attempted, (0..=64).collect::<Vec<_>>());
+    assert!(pending.is_empty());
+    assert_eq!(buffer.filled_len(), 0);
+}
+
+#[test]
+fn original_session_error_wins_over_final_draw_error_and_success_reports_draw_error() {
+    let original: anyhow::Result<()> = Err(anyhow::Error::new(DrawFailure(11)).context("protocol processing failed"));
+    let final_draw = Err(anyhow::Error::new(DrawFailure(99)).context("final draw failed"));
+    let error = finish_presentation(original, final_draw).expect_err("original error is retained");
+    assert_eq!(error.downcast_ref::<DrawFailure>(), Some(&DrawFailure(11)));
+    assert_eq!(error.to_string(), "protocol processing failed");
+
+    let error = finish_presentation(Ok(42), Err(anyhow::Error::new(DrawFailure(99))))
+        .expect_err("successful session reports the final draw failure");
+    assert_eq!(error.downcast_ref::<DrawFailure>(), Some(&DrawFailure(99)));
+    assert_eq!(
+        finish_presentation::<_, anyhow::Error>(Ok(42), Ok(())).expect("success"),
+        42
+    );
 }

@@ -49,7 +49,7 @@ use crate::error::IronError;
 use crate::frame_pacing::FramePacing;
 use crate::input::InputTransaction;
 use crate::network_client::WasmNetworkClient;
-use crate::presentation::PendingRegions;
+use crate::presentation::{PendingRegions, finish_presentation};
 use crate::printer::{JsPrinterStreamCallbacks, WasmPrinter, WasmPrinterBackend, wasm_printer_pair};
 
 const DEFAULT_WIDTH: u16 = 1280;
@@ -628,13 +628,14 @@ fn present_pending(
     if pending.is_empty() {
         return Ok(());
     }
-    pacing.presented(performance.now());
-    for region in pending.drain() {
-        let result = gui.draw_image(image, region, draw_buffer);
-        draw_buffer.clear();
-        result.context("draw updated region")?;
+    let started_ms = performance.now();
+    let (stats, result) = pending.flush(draw_buffer, &mut |region, buffer| {
+        gui.draw_image(image, region, buffer).context("draw updated region")
+    });
+    if stats.uploaded_bytes != 0 {
+        pacing.presented(started_ms);
     }
-    Ok(())
+    result
 }
 
 impl Session {
@@ -986,19 +987,17 @@ impl iron_remote_desktop::Session for Session {
                                 .context("Send frame to writer task")?;
                         }
                         ActiveStageOutput::GraphicsUpdate(region) => {
-                            if let Some(region) = pending_regions.push(region) {
+                            pending_regions.push_or_flush(region, &mut |pending| {
                                 present_pending(
                                     &gui,
                                     &image,
-                                    &mut pending_regions,
+                                    pending,
                                     &mut draw_buffer,
                                     &mut pacing,
                                     &mut presentation_timer,
                                     &performance,
-                                )?;
-                                let overflow = pending_regions.push(region);
-                                debug_assert!(overflow.is_none(), "pending regions were just drained");
-                            }
+                                )
+                            })?;
                         }
                         ActiveStageOutput::PointerDefault => {
                             self.set_cursor_style(CursorStyle::Default)?;
@@ -1240,8 +1239,7 @@ impl iron_remote_desktop::Session for Session {
             &mut presentation_timer,
             &performance,
         );
-        let disconnect_reason = outcome?;
-        flushed?;
+        let disconnect_reason = finish_presentation(outcome, flushed.map_err(IronError::from))?;
 
         info!(%disconnect_reason, "RDP session terminated");
 
