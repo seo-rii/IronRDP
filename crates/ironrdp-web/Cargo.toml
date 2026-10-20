@@ -24,6 +24,8 @@ qoi = ["ironrdp/qoi"]
 qoiz = ["ironrdp/qoiz"]
 # Opt in only for measured experiments; ordinary builds coalesce within each PDU.
 experimental-presentation-pacing = []
+# Browser integration fixtures, never enabled by production builds.
+__test-session = []
 
 [dependencies]
 # Protocols

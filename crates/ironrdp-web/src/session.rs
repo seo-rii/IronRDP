@@ -2692,3 +2692,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(target_arch = "wasm32", feature = "__test-session"))]
+#[path = "session_fixture.rs"]
+mod session_fixture;
