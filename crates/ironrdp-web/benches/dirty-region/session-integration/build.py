@@ -19,6 +19,7 @@ CRATE = BENCH.parent.parent
 REPO = CRATE.parent.parent
 FLAGS = ('-Ctarget-feature=+simd128,+bulk-memory --cfg getrandom_backend="wasm_js" '
          '-Copt-level=s -Ccodegen-units=1 -Cllvm-args=-enable-dfa-jump-thread')
+WASM_OPT_VERSION = 133
 
 
 def digest(path):
@@ -65,12 +66,22 @@ def main():
     parser.add_argument("--output", type=Path, default=BENCH / "output/session-correctness")
     parser.add_argument("--target-dir", type=Path, help="Cargo cache unique to this physical workspace")
     parser.add_argument("--wasm-pack", default=shutil.which("wasm-pack"))
+    parser.add_argument("--wasm-opt", default=shutil.which("wasm-opt"),
+                        help=f"Binaryen {WASM_OPT_VERSION} optimizer executable (defaults to PATH)")
     parser.add_argument("--toolchain", default=tomllib.loads((REPO / "rust-toolchain.toml").read_text())["toolchain"]["channel"])
     parser.add_argument("--expected-head", help="require this full commit SHA and unchanged sources")
     parser.add_argument("--deployment-smoke", action="store_true", help="also build the normal package without fixture exports")
     args = parser.parse_args()
     if not args.wasm_pack:
         parser.error("install wasm-pack or supply --wasm-pack")
+    optimizer = shutil.which(args.wasm_opt) if args.wasm_opt else None
+    if not optimizer:
+        parser.error(f"install Binaryen {WASM_OPT_VERSION} or supply --wasm-opt")
+    optimizer = Path(optimizer).resolve()
+    optimizer_version = subprocess.check_output([str(optimizer), "--version"], text=True).strip()
+    version_match = re.fullmatch(r"wasm-opt version (\d+)(?:\s.*)?", optimizer_version)
+    if not version_match or int(version_match[1]) != WASM_OPT_VERSION:
+        parser.error(f"this correctness harness pins Binaryen {WASM_OPT_VERSION}; found {optimizer_version!r}")
     if args.expected_head and not re.fullmatch(r"[0-9a-f]{40}", args.expected_head):
         parser.error("--expected-head must be a full lowercase Git SHA")
     output = args.output.resolve()
@@ -88,6 +99,8 @@ def main():
         manifest.update(source_sha256=original,
                         rustc=subprocess.check_output(["rustc", f"+{args.toolchain}", "-Vv"], cwd=REPO, text=True),
                         wasm_pack=subprocess.check_output([args.wasm_pack, "--version"], text=True).strip(),
+                        wasm_opt={"path": str(optimizer), "version": optimizer_version,
+                                  "sha256": digest(optimizer), "pinned_version": WASM_OPT_VERSION},
                         profile="workspace release via wasm-pack, followed by its default wasm-opt step",
                         rustflags=FLAGS,
                         package_boundary="raw wasm-pack web package before xtask's Vite URL rewrite and npm build")
@@ -96,7 +109,8 @@ def main():
         if optimization is False:
             raise RuntimeError("release wasm-opt is disabled in the crate metadata")
         env = dict(os.environ, RUSTUP_TOOLCHAIN=args.toolchain, RUSTFLAGS=FLAGS,
-                   CARGO_TARGET_DIR=str(target), CARGO_BUILD_BUILD_DIR=str(target / "build"))
+                   CARGO_TARGET_DIR=str(target), CARGO_BUILD_BUILD_DIR=str(target / "build"),
+                   PATH=os.pathsep.join((str(optimizer.parent), os.environ.get("PATH", ""))))
         env.pop("CARGO_ENCODED_RUSTFLAGS", None)
         variants = [("default", ["__test-session"]),
                     ("paced", ["__test-session", "experimental-presentation-pacing"])]
@@ -117,11 +131,15 @@ def main():
             log_text = log_path.read_text()
             if "wasm-opt" not in log_text or "Optimizing wasm binaries" not in log_text:
                 raise RuntimeError(f"{name}: wasm-pack did not report its wasm-opt step; inspect {log_path}")
+            optimizer_paths = re.findall(r'found wasm-opt at "([^"]+)"', log_text)
+            if not optimizer_paths or any(Path(path).resolve() != optimizer for path in optimizer_paths):
+                raise RuntimeError(f"{name}: wasm-pack did not select {optimizer}; inspect {log_path}")
             manifest["variants"][name] = {
                 "features": features, "default_features": True, "simd128": True,
                 "pacing": "experimental-presentation-pacing" in features,
                 "fixture": "__test-session" in features, "command": command,
                 "wasm_opt_step_reported": True, "build_log": log_path.name,
+                "wasm_opt_selected_path": str(optimizer),
                 "build_log_sha256": digest(log_path),
                 "artifacts": {path.relative_to(package).as_posix(): digest(path)
                               for path in sorted(package.rglob("*")) if path.is_file()},
@@ -129,6 +147,8 @@ def main():
             write_json(output / "build-manifest.json", manifest)
         if source_hashes() != original:
             raise RuntimeError("workspace sources or harness changed while building")
+        if digest(optimizer) != manifest["wasm_opt"]["sha256"]:
+            raise RuntimeError("wasm-opt executable changed while building")
         current = checkout_state(args.expected_head)
         if current["checked_commit_sha"] != manifest["checked_commit_sha"]:
             raise RuntimeError("HEAD changed while building")

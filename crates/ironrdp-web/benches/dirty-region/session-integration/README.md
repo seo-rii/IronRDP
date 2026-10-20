@@ -24,8 +24,8 @@ requires a configured RDP endpoint and is explicitly reported as **not run**.
 
 ## Run
 
-Use the repository's Rust 1.94.1 and wasm-pack 0.15.0, Python 3.11 or newer,
-Playwright 1.61.0 and Chromium:
+Use the repository's Rust 1.94.1, wasm-pack 0.15.0, Binaryen 133, Python 3.11 or
+newer, Playwright 1.61.0 and Chromium:
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -33,6 +33,15 @@ cargo install wasm-pack --version 0.15.0 --locked
 python3 -m pip install playwright==1.61.0
 python3 -m playwright install chromium
 ```
+
+Install [Binaryen 133](https://github.com/WebAssembly/binaryen/releases/tag/version_133)
+and place its `bin` directory on `PATH`, or pass its executable with `--wasm-opt`.
+The Linux x86-64 archive's SHA-256 is
+`2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489`;
+CI verifies it before extraction. This harness pins that exact optimizer for
+reproducibility. A local Binaryen 108 build exported the wrong externref table
+with this toolchain, causing bindings initialization to fail. This observation
+does not establish a minimum supported Binaryen version for other builds.
 
 From `crates/ironrdp-web/benches/dirty-region`:
 
@@ -46,13 +55,16 @@ The output directory must be new or empty. The builder defaults to an isolated
 Cargo target directory inside it. Use `--target-dir` to reuse a cache dedicated
 to this physical checkout; do not share that target with another worktree that
 contains the same path packages. `--wasm-pack` and the runner's `--chromium`
-accept explicit executable paths.
+accept explicit executable paths. The builder puts the selected `--wasm-opt`
+directory first on `PATH` and requires wasm-pack's build log to identify that
+executable; the optimizer step remains enabled.
 
 For committed source verification, add `--expected-head "$(git rev-parse HEAD)"`
 to the build command. It requires a clean tracked checkout and no untracked source
 files. Builds record the checked commit, source and harness hashes, compiler and
-wasm-pack versions, commands, flags, per-variant features, optimizer-step logs and
-package hashes in `build-manifest.json`. The runner rejects changed sources,
+wasm-pack versions, commands, flags, per-variant features, the optimizer's path,
+version and binary hash, optimizer-step logs and package hashes in
+`build-manifest.json`. The runner rejects changed sources,
 packages, build logs or HEAD before and after the browser checks. Local builds
 of uncommitted edits remain supported and are identified in the report.
 

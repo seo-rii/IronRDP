@@ -43,6 +43,16 @@ jobs:
           rustup target add wasm32-unknown-unknown
           cargo install wasm-pack --version 0.15.0 --locked
 
+      - name: Install the pinned Binaryen optimizer
+        run: |
+          binaryen_archive="$RUNNER_TEMP/binaryen-version_133-x86_64-linux.tar.gz"
+          curl --fail --location --retry 3 \
+            --output "$binaryen_archive" \
+            https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz
+          echo "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489  $binaryen_archive" | sha256sum --check -
+          tar --extract --gzip --file "$binaryen_archive" --directory "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_133/bin" >> "$GITHUB_PATH"
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -57,6 +67,7 @@ jobs:
         run: |
           python "$BENCH_DIR/session-integration/build.py" \
             --expected-head "$CHECKED_HEAD" \
+            --wasm-opt "$RUNNER_TEMP/binaryen-version_133/bin/wasm-opt" \
             --target-dir "$RUNNER_TEMP/web-session-target" \
             --output "$BENCH_DIR/output/session-correctness" \
             --deployment-smoke
