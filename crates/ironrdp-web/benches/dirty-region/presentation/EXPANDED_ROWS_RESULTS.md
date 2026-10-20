@@ -5,6 +5,12 @@ the 1.25× dirty-region cap, SIMD alpha normalization, and copy/alpha fusion for
 large input rectangles spanning the framebuffer width. These results isolate
 the additional benefit of applying fusion to the final selected upload rectangle.
 
+These retained measurements describe the source hashes in the linked build
+manifest, before the branch was rebased onto PR #1's bounds-clipping fix and before
+removing the repeated selection in the separate-copy path. They are not timings
+of the latest branch head. Current-head correctness is recorded separately by
+`presentation/ci.py`; this report does not claim a new performance measurement.
+
 For example, 1536×720, 1800×720 and 1919×1080 updates on a 1920px-wide framebuffer
 already upload whole rows in the baseline. Selecting that coverage before
 checking the fusion threshold lets those updates use the same fused copy as an

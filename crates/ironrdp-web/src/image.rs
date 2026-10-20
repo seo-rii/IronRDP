@@ -6,12 +6,30 @@ use ironrdp_core::WriteBuf;
 
 /// Copies the dirty `region` into `buffer` from its current cursor (clear it between regions).
 /// The returned rect may be wider than `region`: the whole-rows path widens to full image width.
+/// The region must already be clipped to the framebuffer. Source alpha is preserved.
+#[expect(
+    clippy::allow_attributes,
+    reason = "this source is compiled in production, tests and benchmarks with different callers"
+)]
+#[allow(dead_code, reason = "the raw extraction API is used by tests and benchmarks")]
 pub(crate) fn extract_partial_image(
     image: &DecodedImage,
     region: InclusiveRectangle,
     buffer: &mut WriteBuf,
 ) -> InclusiveRectangle {
     let region = select_upload_region(image, region);
+    copy_selected_region(image, region, buffer)
+}
+
+/// Copies exactly the selected coverage, preserving source alpha and appending at the cursor.
+/// The region must be nonempty and within the framebuffer; this never reapplies the upload policy.
+pub(crate) fn copy_selected_region(
+    image: &DecodedImage,
+    region: InclusiveRectangle,
+    buffer: &mut WriteBuf,
+) -> InclusiveRectangle {
+    debug_assert!(region.left <= region.right && region.top <= region.bottom);
+    debug_assert!(region.right < image.width() && region.bottom < image.height());
     if region.left == 0 && region.width() == image.width() {
         extract_whole_rows(image, region, buffer)
     } else {
@@ -20,7 +38,10 @@ pub(crate) fn extract_partial_image(
 }
 
 /// Selects the upload coverage without copying or changing the framebuffer's pixels.
+/// The region must be nonempty and within the framebuffer before this policy is applied.
 pub(crate) fn select_upload_region(image: &DecodedImage, region: InclusiveRectangle) -> InclusiveRectangle {
+    debug_assert!(region.left <= region.right && region.top <= region.bottom);
+    debug_assert!(region.right < image.width() && region.bottom < image.height());
     let prefer_contiguous_copy = 64 < region.height() || 512 < region.width();
     // Widen only when copying, alpha processing, and uploading at most 25% extra pixels.
     let acceptable_overdraw = u32::from(image.width()) * 4 <= u32::from(region.width()) * 5;

@@ -85,10 +85,35 @@ fn assert_extraction(image: &DecodedImage, region: InclusiveRectangle, whole_row
     };
     let selected = image::select_upload_region(image, region.clone());
     assert_eq!(selected, expected, "unexpected selection for {region:?}");
+    assert_eq!(image::select_upload_region(image, selected.clone()), selected);
+    assert!(selected.left <= region.left && region.right <= selected.right);
+    assert_eq!((selected.top, selected.bottom), (region.top, region.bottom));
     let mut buffer = WriteBuf::new();
     let actual = image::extract_partial_image(image, region.clone(), &mut buffer);
     assert_eq!(actual, expected, "unexpected extraction for {region:?}");
     assert_pixels(buffer.filled(), image.width(), &actual);
+}
+
+#[test]
+fn selected_copy_keeps_exact_coverage_without_reapplying_the_upload_policy() {
+    let source = patterned_image(1920, 96);
+    let original = source.data().to_vec();
+    let mut buffer = WriteBuf::new();
+    for region in [
+        rectangle(37, 11, 1536, 35),
+        rectangle(37, 11, 1535, 34),
+        rectangle(0, 11, 1920, 35),
+    ] {
+        // The first region would be expanded by the selection policy. A caller that
+        // already chose this coverage must receive only these pixels from the copy step.
+        buffer.clear();
+        buffer.write_slice(&[11, 23, 47]);
+        let copied = image::copy_selected_region(&source, region.clone(), &mut buffer);
+        assert_eq!(copied, region);
+        assert_eq!(&buffer.filled()[..3], &[11, 23, 47]);
+        assert_pixels(&buffer.filled()[3..], source.width(), &region);
+        assert_eq!(source.data(), original);
+    }
 }
 
 #[test]

@@ -123,8 +123,11 @@ bytes and unchanged source data. `prepare` in direct mode still measures raw
 extraction; it excludes the optimized presentation path and is not a selection
 metric. Select using complete `draw` and, for full frames, `draw_js` measurements.
 
-To isolate the expanded-row optimization, pass
-`--baseline a5682c165cd81824fae397e976cb2e846d3ef0f4` to the direct build command.
+To compare the current expanded-row implementation with its PR #1 base, pass
+`--baseline 890620691d36b22dd54ac77e7b255018cc3f683d` to the direct build command.
+The retained historical measurements used `a5682c16` and the source hashes in
+their manifest; they do not describe the latest head after clipping and copy-path
+changes. New measurements require fresh builds of both selected revisions.
 The case matrix in [EXPANDED_ROWS_RESULTS.md](EXPANDED_ROWS_RESULTS.md) includes
 the 80% width boundary, selected uploads immediately below and above 256 KiB,
 odd framebuffer widths, and 4K. Previously optimized full frames and compact
@@ -147,6 +150,11 @@ and calls the real `Canvas::draw_image` and copy/alpha helpers in both modules.
 The build guard and the loaded modules must agree on `[false, true]` SIMD support.
 No historical revision or source adapter is used. It checks sparse initialization,
 resize, boundary cases and all RGBA bytes, without running performance timings.
+The current bounds matrix includes updates completely outside the framebuffer
+before expansion and clipped widths of 1535/1536/1537 pixels crossed with
+34/35-row uploads. Each runs with sparse and initialized canvases in both builds;
+sparse source frames include transparent borders. The CI guard requires every
+case to report unchanged source pixels and the exact upload buffer length.
 The report records the checked commit, source and artifact hashes, compiler,
 browser and observed feature flags. Use `--target-dir` for an isolated reusable
 cache, as for `build.py`. The Web pixel correctness workflow runs this command

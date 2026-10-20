@@ -45,6 +45,13 @@ or calculating pixel offsets. Partly overlapping regions draw their visible
 portion; regions outside the framebuffer or with reversed bounds do not upload
 pixels.
 
+After clipping, the upload coverage is selected once. Whole rows are selected
+only within the existing 25% overdraw limit. The final coverage determines whether
+to combine copying and alpha normalization for uploads of at least 256 KiB;
+expanded whole-row uploads use the same rule as originally full-width updates.
+The copy step preserves that selected coverage and does not apply the expansion
+policy again. Raw image extraction continues to preserve source alpha.
+
 ## Browser pixel correctness
 
 The [Web pixel correctness workflow](../../.github/workflows/web-pixel-correctness.yml)
@@ -54,11 +61,13 @@ explicitly disabled and enabled. Build guards and an exported WASM feature probe
 verify which implementation each package compiled. No historical Git revision
 or benchmark patch is needed.
 
-The checks cover full and partial updates, whole-row expansion and full-width
-fusion thresholds, unaligned pixel-copy buffers, incomplete trailing pixels,
-sparse first updates, resizes, out-of-bounds update clipping, source immutability,
-and equality of the resulting Canvas pixels. CI retains commit IDs,
-source/package hashes, browser information and correctness results as artifacts.
+The checks cover full and partial updates, whole-row expansion and fusion
+thresholds for both full-width and expanded uploads, unaligned pixel-copy buffers,
+incomplete trailing pixels, sparse first updates, resizes, out-of-bounds update
+clipping, source immutability, and equality of the resulting Canvas pixels. Bounds checks cross clipped widths
+of 1535/1536/1537 pixels with 34/35-row uploads and retain fully outside updates as
+no-ops before expansion. CI retains commit IDs, source/package hashes, browser
+information and correctness results as artifacts.
 It runs no performance measurements and does not emulate a browser lacking SIMD
 support.
 

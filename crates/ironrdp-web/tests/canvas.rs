@@ -34,6 +34,7 @@ fn regions_are_clipped_before_dimensions_are_calculated() {
         ((64, 128), [3, 120, 7, 150], Some([3, 120, 7, 127])),
         ((64, 128), [60, 120, 80, 150], Some([60, 120, 63, 127])),
         ((64, 128), [64, 0, 79, 127], None),
+        ((64, 128), [64, 0, 127, 127], None),
         ((64, 128), [0, 128, 63, 150], None),
         ((64, 128), [9, 3, 8, 7], None),
         ((64, 128), [3, 9, 7, 8], None),
@@ -49,6 +50,28 @@ fn regions_are_clipped_before_dimensions_are_calculated() {
             expected.map(rectangle),
             "framebuffer={width}x{height}, region={region:?}"
         );
+    }
+}
+
+#[test]
+fn clipped_coverage_controls_expansion_and_the_fused_copy_threshold() {
+    let source = DecodedImage::new(PixelFormat::RgbA32, 1920, 96);
+    for (width, expanded) in [(1535, false), (1536, true), (1537, true)] {
+        for (height, large_enough) in [(34, false), (35, true)] {
+            let region = InclusiveRectangle {
+                left: 1920 - width,
+                top: 5,
+                right: u16::MAX,
+                bottom: 5 + height - 1,
+            };
+            let clipped = canvas::clip_region(&source, &region).expect("overlapping region");
+            assert_eq!(clipped.width(), width);
+            let selected = image::select_upload_region(&source, clipped.clone());
+            assert_eq!(selected.left, if expanded { 0 } else { clipped.left });
+            assert_eq!(selected.right, 1919);
+            assert_eq!(selected.height(), height);
+            assert_eq!(canvas::prefer_fused_copy(&source, &selected), expanded && large_enough);
+        }
     }
 }
 
