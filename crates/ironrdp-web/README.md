@@ -109,7 +109,12 @@ Reactivation flushes the old framebuffer and cancels its timer before the
 activation exchange. After negotiation, both the Canvas and framebuffer use the
 server's final dimensions, including server-initiated or adjusted sizes. A new
 framebuffer generation clears the Canvas even when its dimensions are unchanged,
-resets pacing, and presents its first visible update immediately. The activation
+resets pacing, and presents its first visible update immediately. `desktopSize()`
+reports the latest negotiated dimensions. The optional `canvasResizedCallback`
+runs after initial Canvas setup and each negotiated replacement, including an
+equal-size reactivation; it sees the new Canvas and desktop dimensions so the UI
+can recompute its scaling. A thrown callback error terminates the run.
+The activation
 exchange still awaits server traffic without selecting input events, so shutdown
 requested during an unanswered activation exchange remains deferred. This change
 does not add an activation timeout or restructure that protocol state machine.

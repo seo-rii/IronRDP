@@ -5,11 +5,11 @@
     reason = "wasm-bindgen requires public functions inside this private fixture module"
 )]
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use std::borrow::Cow;
 
 use futures_util::future::{AbortHandle, abortable};
-use iron_remote_desktop::{IronError as _, Session as _, SessionTerminationInfo as _};
+use iron_remote_desktop::{IronError as _, Session as _, SessionBuilder as _, SessionTerminationInfo as _};
 use ironrdp::connector::connection_activation::ConnectionActivationFactory;
 use ironrdp::pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
 use ironrdp::pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdatePdu, Fragmentation, UpdateCode};
@@ -26,7 +26,7 @@ use ironrdp::pdu::x224::X224;
 use ironrdp_core::encode_vec;
 use wasm_bindgen::prelude::*;
 
-use super::{SecurityConfig, Session, build_config, connector, mpsc, writer_task};
+use super::{SecurityConfig, Session, SessionBuilder, build_config, connector, mpsc, writer_task};
 
 const USER_CHANNEL_ID: u16 = 1002;
 const IO_CHANNEL_ID: u16 = 1003;
@@ -49,6 +49,7 @@ impl SessionFixture {
         width: u16,
         height: u16,
         cursor_callback: Option<js_sys::Function>,
+        canvas_resized_callback: Option<js_sys::Function>,
     ) -> Result<Self, JsValue> {
         if width == 0 || height == 0 {
             return Err(JsValue::from_str("fixture dimensions must be nonzero"));
@@ -88,13 +89,22 @@ impl SessionFixture {
         let (writer_tx, writer_rx) = mpsc::unbounded();
         wasm_bindgen_futures::spawn_local(writer_task(writer_rx, writer, None));
         let (input_events_tx, input_events_rx) = mpsc::unbounded();
+        // Exercise the real public setter's storage as well as Session notification.
+        let builder = SessionBuilder::default();
+        let builder = if let Some(callback) = canvas_resized_callback {
+            builder.canvas_resized_callback(callback)
+        } else {
+            builder
+        };
+        let canvas_resized_callback = builder.0.borrow().canvas_resized_callback.clone();
         Ok(Self {
             session: Session {
-                desktop_size,
+                desktop_size: Cell::new(desktop_size),
                 input_database: RefCell::new(ironrdp::input::Database::new()),
                 writer_tx,
                 input_events_tx,
                 render_canvas: canvas,
+                canvas_resized_callback,
                 set_cursor_style_callback: cursor_callback.unwrap_or_else(|| js_sys::Function::new_no_args("")),
                 set_cursor_style_callback_context: JsValue::NULL,
                 input_events_rx: RefCell::new(Some(input_events_rx)),
@@ -132,6 +142,14 @@ impl SessionFixture {
         self.session
             .synchronize_lock_keys(false, false, false, false)
             .map_err(|error| JsValue::from_str(&error.backtrace()))
+    }
+
+    pub fn desktop_width(&self) -> u16 {
+        self.session.desktop_size().width
+    }
+
+    pub fn desktop_height(&self) -> u16 {
+        self.session.desktop_size().height
     }
 
     /// Cancels the actual run future, exercising the production timer/MessageChannel Drop paths.

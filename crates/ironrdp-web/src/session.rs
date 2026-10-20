@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::net::{Ipv4Addr, SocketAddrV4};
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -78,6 +78,7 @@ struct SessionBuilderInner {
     desktop_size: DesktopSize,
 
     render_canvas: Option<HtmlCanvasElement>,
+    canvas_resized_callback: Option<js_sys::Function>,
     set_cursor_style_callback: Option<js_sys::Function>,
     set_cursor_style_callback_context: Option<JsValue>,
     remote_clipboard_changed_callback: Option<js_sys::Function>,
@@ -125,6 +126,7 @@ impl Default for SessionBuilderInner {
             },
 
             render_canvas: None,
+            canvas_resized_callback: None,
             set_cursor_style_callback: None,
             set_cursor_style_callback_context: None,
             remote_clipboard_changed_callback: None,
@@ -253,8 +255,9 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
         self.clone()
     }
 
-    /// Because the server does not resize the framebuffer in the RDP protocol, this feature is unused in IronRDP.
-    fn canvas_resized_callback(&self, _callback: js_sys::Function) -> Self {
+    /// Optional; called after Canvas initialization and each negotiated framebuffer replacement.
+    fn canvas_resized_callback(&self, callback: js_sys::Function) -> Self {
+        self.0.borrow_mut().canvas_resized_callback = Some(callback);
         self.clone()
     }
 
@@ -360,6 +363,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
             client_name,
             desktop_size,
             render_canvas,
+            canvas_resized_callback,
             set_cursor_style_callback,
             set_cursor_style_callback_context,
             remote_clipboard_changed_callback,
@@ -397,6 +401,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
             desktop_size = inner.desktop_size;
 
             render_canvas = inner.render_canvas.clone().context("render_canvas missing")?;
+            canvas_resized_callback = inner.canvas_resized_callback.clone();
 
             set_cursor_style_callback = inner
                 .set_cursor_style_callback
@@ -549,12 +554,13 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
         spawn_local(writer_task(writer_rx, rdp_writer, outbound_message_size_limit));
 
         Ok(Session {
-            desktop_size: connection_result.desktop_size,
+            desktop_size: Cell::new(connection_result.desktop_size),
             input_database: RefCell::new(ironrdp::input::Database::new()),
             writer_tx,
             input_events_tx,
 
             render_canvas,
+            canvas_resized_callback,
             set_cursor_style_callback,
             set_cursor_style_callback_context,
 
@@ -597,12 +603,13 @@ impl iron_remote_desktop::SessionTerminationInfo for SessionTerminationInfo {
 }
 
 pub(crate) struct Session {
-    desktop_size: connector::DesktopSize,
+    desktop_size: Cell<connector::DesktopSize>,
     input_database: RefCell<ironrdp::input::Database>,
     writer_tx: mpsc::UnboundedSender<Vec<u8>>,
     input_events_tx: mpsc::UnboundedSender<RdpInputEvent>,
 
     render_canvas: HtmlCanvasElement,
+    canvas_resized_callback: Option<js_sys::Function>,
     set_cursor_style_callback: js_sys::Function,
     set_cursor_style_callback_context: JsValue,
 
@@ -722,6 +729,15 @@ impl Session {
 
         Ok(())
     }
+
+    fn notify_canvas_resized(&self) -> Result<(), IronError> {
+        if let Some(callback) = &self.canvas_resized_callback {
+            callback
+                .call0(&JsValue::NULL)
+                .map_err(|error| anyhow::anyhow!("canvas resized callback failed: {error:?}"))?;
+        }
+        Ok(())
+    }
 }
 
 impl iron_remote_desktop::Session for Session {
@@ -793,6 +809,7 @@ impl iron_remote_desktop::Session for Session {
         // and activation traffic are excluded, as well as time waiting for network data.
         let mut post_read_work_ms = 0.0;
         let mut browser_yield = config.yield_budget.map(|_| BrowserYield::new()).transpose()?;
+        self.notify_canvas_resized()?;
 
         // We retain the factory to drive the Deactivation-Reactivation Sequence locally.
         let activation_factory = connection_result.activation_factory;
@@ -1240,6 +1257,8 @@ impl iron_remote_desktop::Session for Session {
                                     gui.resize(width, height);
                                     image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
                                     presentation.replace_framebuffer();
+                                    self.desktop_size.set(desktop_size);
+                                    self.notify_canvas_resized()?;
                                     post_read_work_ms = 0.0;
                                     break 'activation_seq;
                                 }
@@ -1331,9 +1350,10 @@ impl iron_remote_desktop::Session for Session {
     }
 
     fn desktop_size(&self) -> DesktopSize {
+        let desktop_size = self.desktop_size.get();
         DesktopSize {
-            width: self.desktop_size.width,
-            height: self.desktop_size.height,
+            width: desktop_size.width,
+            height: desktop_size.height,
         }
     }
 

@@ -135,10 +135,22 @@ function start(module, width = 64, height = 48, options = {}) {
     }
     document.querySelector("main").replaceChildren(canvas);
     const cursorUpdates = [];
-    const fixture = new module.SessionFixture(canvas, "ws://session-fixture.invalid/established", width, height,
-        (kind, data, hotspotX, hotspotY) => cursorUpdates.push({kind, data, hotspotX, hotspotY}));
+    const resizeUpdates = [];
+    let fixture;
+    fixture = new module.SessionFixture(canvas, "ws://session-fixture.invalid/established", width, height,
+        (kind, data, hotspotX, hotspotY) => cursorUpdates.push({kind, data, hotspotX, hotspotY}),
+        (...args) => {
+            assert(args.length === 0, "canvas resize callback received unexpected arguments");
+            const snapshot = {canvas: [canvas.width, canvas.height],
+                desktop: [fixture.desktop_width(), fixture.desktop_height()]};
+            resizeUpdates.push(snapshot);
+            same(snapshot.desktop, snapshot.canvas, "resize callback observes synchronized desktop dimensions");
+            if (options.failResizeCallbackAt === resizeUpdates.length) {
+                throw new Error(`session-fixture-resize-callback-failure-${resizeUpdates.length}`);
+            }
+        });
     const state = {canvas, fixture, socket: sockets.at(-1), width, height, attempts: [], draws: 0, failDraw: false,
-        failAttempts: new Set(), cursorUpdates,
+        failAttempts: new Set(), cursorUpdates, resizeUpdates,
         expected: new Uint8ClampedArray(width * height * 4), channelStart: channels.length, outcome: null};
     observedCanvases.set(canvas, state);
     state.done = fixture.run().then(
@@ -203,7 +215,8 @@ async function finished(state, expectedError = null) {
     return {outcome: state.outcome, draw_attempts: draws, successful_uploads: state.draws,
         canceled_timers: clock.canceled, fired_timers: clock.fired,
         canceled_cleanup_intervals: clock.canceledIntervals, received_frames: state.socket.receivedFrames,
-        socket_closed_before_free: true, socket_close_calls: state.socket.closeCalls, outbound_frames: state.socket.sent.length};
+        socket_closed_before_free: true, socket_close_calls: state.socket.closeCalls, outbound_frames: state.socket.sent.length,
+        resize_notifications: state.resizeUpdates};
 }
 
 window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
@@ -289,6 +302,36 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
             assert(lastEvents[0]?.kind === "send" && lastEvents[1]?.kind === "close"
                 && lastEvents[1].sent === writes + 1, "WebSocket closed before its queued frame was sent");
             results.push({case: "writer-drains-queued-frame", ...result});
+        }
+        {
+            const state = start(module, 64, 48);
+            await until(() => state.resizeUpdates.length || state.outcome, "initial canvas size notification");
+            assert(!state.outcome && state.resizeUpdates.length === 1, "initial canvas resize was not notified exactly once");
+            same(state.resizeUpdates[0].canvas, [64, 48], "initial resize callback dimensions");
+            check(state, "initial resize callback leaves transparent framebuffer");
+            await first(module, state);
+            assert(state.resizeUpdates.length === 1, "drawing a frame repeated the resize callback");
+            state.socket.push(module.session_fixture_disconnect());
+            results.push({case: "initial-canvas-size-notification", ...await finished(state)});
+        }
+        for (const callbackIndex of [1, 2]) {
+            const state = start(module, 64, 48, {failResizeCallbackAt: callbackIndex});
+            if (callbackIndex === 2) {
+                await first(module, state, true);
+                state.socket.push(module.session_fixture_deactivate()); await task();
+                assert(state.resizeUpdates.length === 1, "deactivation notified an unnegotiated resize");
+                state.socket.push(module.session_fixture_activate(80, 40));
+            }
+            const result = await finished(state, `session-fixture-resize-callback-failure-${callbackIndex}`);
+            assert(state.resizeUpdates.length === callbackIndex, "resize callback failure was retried or ignored");
+            const dimensions = callbackIndex === 1 ? [64, 48] : [80, 40];
+            same(state.resizeUpdates.at(-1).canvas, dimensions, "failed resize callback sees final canvas dimensions");
+            state.width = dimensions[0]; state.height = dimensions[1];
+            state.expected = new Uint8ClampedArray(state.width * state.height * 4);
+            check(state, "resize callback failure leaves the new framebuffer generation");
+            assert(state.draws === callbackIndex - 1, "resize callback failure continued presenting");
+            results.push({case: callbackIndex === 1 ? "initial-resize-callback-error" : "reactivation-resize-callback-error",
+                ...result});
         }
         {
             const state = start(module); await first(module, state); await second(module, state, expectedPacing);
@@ -425,15 +468,23 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
         }
         {
             const state = start(module); await first(module, state, true); await second(module, state, expectedPacing);
+            assert(state.resizeUpdates.length === 1, "initial framebuffer creation was not notified once");
             for (const [width, height] of [[80, 40], [80, 40]]) {
+                const callbacks = state.resizeUpdates.length;
                 state.socket.push(module.session_fixture_deactivate());
                 await task();
                 assert(clock.timeouts.size === 0, "deactivation retained a presentation timer");
+                assert(state.resizeUpdates.length === callbacks, "deactivation notified an unnegotiated resize");
                 const writes = state.socket.sent.length;
                 state.socket.push(module.session_fixture_activate(width, height));
-                await until(() => state.socket.sent.length >= writes + 5 || state.outcome, "reactivation writes");
+                await until(() => (state.socket.sent.length >= writes + 5 && state.resizeUpdates.length > callbacks)
+                    || state.outcome, "reactivation writes and size notification");
                 await task();
                 assert(!state.outcome, `reactivation failed: ${JSON.stringify(state.outcome)}`);
+                assert(state.resizeUpdates.length === callbacks + 1, "new framebuffer generation was not notified once");
+                same(state.resizeUpdates.at(-1).canvas, [width, height], "negotiated resize callback dimensions");
+                same([state.fixture.desktop_width(), state.fixture.desktop_height()], [width, height],
+                    "session desktop dimensions after reactivation");
                 state.width = width; state.height = height;
                 state.expected = new Uint8ClampedArray(width * height * 4);
                 check(state, "new framebuffer generation");
@@ -441,6 +492,8 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
                 await task();
                 paint(state, 2, 2, 2, 2, 0xEECC11);
                 check(state, "first sparse frame after reactivation");
+                assert(clock.timeouts.size === 0 && state.resizeUpdates.length === callbacks + 1,
+                    "first frame after reactivation was paced or repeated the resize callback");
             }
             state.socket.push(module.session_fixture_disconnect());
             results.push({case: "reactivation-size-and-generation", ...await finished(state)});

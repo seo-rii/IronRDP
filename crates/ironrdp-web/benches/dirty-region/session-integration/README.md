@@ -105,6 +105,12 @@ Both fixture packages check final RGBA bytes and these production paths:
 - An unsolicited negotiated resize followed by another activation with equal
   dimensions. Each new framebuffer generation clears old Canvas pixels, cancels
   the preceding timer, and presents its first sparse update immediately.
+- The registered Canvas-resize callback sees the current Canvas and public
+  desktop dimensions on initial setup and every negotiated replacement,
+  including equal-size reactivation. Callback errors terminate the run and close
+  its transport. The separate `iron-remote-desktop` component tests check fit and
+  real CSS sizing with a mocked backend that negotiates a different size from
+  the client request; the Session fixture exercises server-driven activation.
 
 Every completed session checks socket closure before freeing the Session,
 remaining timers, MessageChannel handlers and uploads after completion.
