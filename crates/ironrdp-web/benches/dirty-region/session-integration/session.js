@@ -334,6 +334,58 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
                 ...result});
         }
         {
+            const state = start(module); await task();
+            const frameId = 0x12345678;
+            state.socket.push(module.session_fixture_frame_marker(true, frameId));
+            await task();
+            assert(!state.outcome && state.draws === 0 && clock.timeouts.size === 0,
+                "begin marker created a presentation or terminated the session");
+            assert(state.socket.sent.length === 0, "begin marker unexpectedly acknowledged a frame");
+            check(state, "marker-only first update leaves canvas transparent");
+            clock.now = 1;
+            state.socket.push(module.session_fixture_bitmap(1, 1, 3, 3, 0xDD2211));
+            await until(() => state.draws || state.outcome, "first bitmap after begin marker");
+            assert(!state.outcome && state.draws === 1 && state.attempts[0].at === 1 && clock.timeouts.size === 0,
+                "marker delayed the first actual bitmap presentation");
+            paint(state, 1, 1, 3, 3, 0xDD2211);
+            check(state, "first bitmap after begin marker");
+            state.socket.push(module.session_fixture_frame_marker(false, frameId));
+            await until(() => state.socket.sent.length || state.outcome, "end marker acknowledgement");
+            assert(!state.outcome && state.socket.sent.length === 1, "end marker did not send exactly one acknowledgement");
+            const ack = new Uint8Array(await state.socket.sent[0].arrayBuffer());
+            const data = new DataView(ack.buffer, ack.byteOffset, ack.byteLength);
+            assert(ack.length >= 12 && ack[0] === 3 && data.getUint16(2) === ack.length,
+                "end marker did not produce a complete TPKT response");
+            // The uncompressed Share Data header ends with pduType2/compression/length,
+            // followed by the four-byte TS_FRAME_ACKNOWLEDGE_PDU frameId.
+            assert(ack[ack.length - 8] === 0x38 && data.getUint32(ack.length - 4, true) === frameId,
+                "end marker acknowledgement changed its PDU type or frame ID");
+            assert(state.draws === 1 && clock.timeouts.size === 0, "end marker created an extra presentation");
+            check(state, "end marker leaves framebuffer coverage unchanged");
+            state.socket.push(module.session_fixture_disconnect());
+            results.push({case: "frame-marker-no-damage", acknowledged_frame: frameId, ...await finished(state)});
+        }
+        {
+            const state = start(module); await task();
+            const begin = module.session_fixture_frame_marker(true, 7);
+            const bitmap = module.session_fixture_bitmap(0, 0, 1, 1, 0x22CC44);
+            const end = module.session_fixture_frame_marker(false, 7);
+            const frames = new Uint8Array(begin.length + bitmap.length + end.length);
+            frames.set(begin); frames.set(bitmap, begin.length); frames.set(end, begin.length + bitmap.length);
+            clock.now = 1;
+            state.socket.push(frames);
+            await until(() => state.socket.sent.length || state.outcome, "origin bitmap with frame markers");
+            assert(!state.outcome && state.draws === 1 && clock.timeouts.size === 0,
+                "real origin pixel was discarded or frame markers created extra presentations");
+            const upload = state.attempts[0];
+            assert(upload.x === 0 && upload.y === 0 && upload.width === 1 && upload.height === 1 && upload.at === 1,
+                "real origin pixel changed coverage or waited for a presentation timer");
+            paint(state, 0, 0, 1, 1, 0x22CC44);
+            check(state, "real one-pixel origin update is distinct from no damage");
+            state.socket.push(module.session_fixture_disconnect());
+            results.push({case: "origin-pixel-with-frame-markers", ...await finished(state)});
+        }
+        {
             const state = start(module); await first(module, state); await second(module, state, expectedPacing);
             const received = state.socket.receivedFrames;
             clock.advance(20); await task();

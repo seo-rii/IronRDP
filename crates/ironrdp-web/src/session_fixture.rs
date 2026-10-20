@@ -22,6 +22,7 @@ use ironrdp::pdu::rdp::headers::{
     CompressionFlags, ServerDeactivateAll, ShareControlHeader, ShareControlPdu, ShareDataHeader, ShareDataPdu,
     StreamPriority,
 };
+use ironrdp::pdu::surface_commands::{FrameAction, FrameMarkerPdu, SurfaceCommand};
 use ironrdp::pdu::x224::X224;
 use ironrdp_core::encode_vec;
 use wasm_bindgen::prelude::*;
@@ -229,6 +230,24 @@ fn fast_path(payload: &[u8]) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn session_fixture_bitmap(left: u16, top: u16, width: u16, height: u16, color: u32) -> Result<Vec<u8>, JsValue> {
     fast_path(&bitmap_update(left, top, width, height, color)?)
+}
+
+#[wasm_bindgen]
+pub fn session_fixture_frame_marker(begin: bool, frame_id: u32) -> Result<Vec<u8>, JsValue> {
+    let marker = encode_vec(&SurfaceCommand::FrameMarker(FrameMarkerPdu {
+        frame_action: if begin { FrameAction::Begin } else { FrameAction::End },
+        frame_id: Some(frame_id),
+    }))
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let update = encode_vec(&FastPathUpdatePdu {
+        fragmentation: Fragmentation::Single,
+        update_code: UpdateCode::SurfaceCommands,
+        compression_flags: None,
+        compression_type: None,
+        data: &marker,
+    })
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    fast_path(&update)
 }
 
 #[wasm_bindgen]

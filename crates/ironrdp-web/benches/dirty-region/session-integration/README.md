@@ -75,6 +75,9 @@ Both fixture packages check final RGBA bytes and these production paths:
 - Thin, non-square New Pointer updates survive browser cursor downscaling. The
   callback's PNG dimensions, opaque pixels and hotspot are checked independently,
   followed by another framebuffer update on the same connection.
+- FrameMarker-only PDUs do not upload pixels or start a presentation deadline.
+  The first real update remains immediately eligible, End markers still produce
+  an acknowledgement, and a real one-pixel update at the origin is preserved.
 - A first sparse frame and a final update presented during idle, without another
   server PDU. The default creates no presentation timer; pacing uses one timer
   and leaves none armed after drawing.

@@ -16,6 +16,7 @@ from build import BENCH, HERE, checkout_state, digest, source_hashes, write_json
 CASES = {"cursor-1x64", "cursor-64x1", "cursor-1x32", "cursor-2x64", "cursor-3x64",
          "canvas-init-error-closes-writer", "second-run-preserves-active-writer", "writer-drains-queued-frame",
          "initial-canvas-size-notification", "initial-resize-callback-error", "reactivation-resize-callback-error",
+         "frame-marker-no-damage", "origin-pixel-with-frame-markers",
          "idle-presentation", "timer-and-server-ready", "termination-flush", "termination-draw-error",
          "protocol-error-preserved", "draw-error-not-retried", "region-capacity-overflow",
          "region-capacity-66", "region-capacity-130", "overflow-error-preserves-region",
