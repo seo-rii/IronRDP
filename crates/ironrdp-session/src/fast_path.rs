@@ -255,8 +255,9 @@ impl Processor {
             }
             Ok(FastPathUpdate::SurfaceCommands(surface_commands)) => {
                 trace!("Received Surface Commands: {} pieces", surface_commands.len());
-                let update_region = self.process_surface_commands(image, output, surface_commands)?;
-                processor_updates.push(UpdateKind::Region(update_region));
+                if let Some(update_region) = self.process_surface_commands(image, output, surface_commands)? {
+                    processor_updates.push(UpdateKind::Region(update_region));
+                }
             }
             Ok(FastPathUpdate::Bitmap(bitmap_update)) => {
                 trace!("Received bitmap update");
@@ -710,7 +711,7 @@ impl Processor {
         image: &mut DecodedImage,
         output: &mut WriteBuf,
         surface_commands: Vec<SurfaceCommand<'_>>,
-    ) -> SessionResult<InclusiveRectangle> {
+    ) -> SessionResult<Option<InclusiveRectangle>> {
         let mut update_rectangle = None;
 
         for command in surface_commands {
@@ -831,7 +832,8 @@ impl Processor {
             }
         }
 
-        Ok(update_rectangle.unwrap_or_else(InclusiveRectangle::empty))
+        // No changed pixels is distinct from a one-pixel rectangle at the origin.
+        Ok(update_rectangle)
     }
 }
 

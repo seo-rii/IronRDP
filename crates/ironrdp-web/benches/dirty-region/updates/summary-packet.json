@@ -1,0 +1,258 @@
+{
+  "method": "paired log ratios summarized per fresh browser session, then geometric mean across sessions",
+  "limits": "small-n exploratory intervals; synthetic submission/task responsiveness, not live RDP latency",
+  "results": [
+    {
+      "comparison": "aa",
+      "case": "barrier",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0076158531351056,
+      "change_percent": 0.7615853135105524,
+      "exploratory_ci95_percent": [
+        -4.671146267433434,
+        6.503924859671301
+      ],
+      "session_ratios": [
+        1.0537447445191568,
+        1.0014780739483362,
+        0.9681441460926069,
+        1.008934740305237
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "contained",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0163962216052713,
+      "change_percent": 1.6396221605271284,
+      "exploratory_ci95_percent": [
+        -0.5969451529683244,
+        3.926512206613587
+      ],
+      "session_ratios": [
+        1.0127805739184559,
+        1.031652263198208,
+        1.0228467188040598,
+        0.9986031082573149
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "disjoint",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0146686207647333,
+      "change_percent": 1.4668620764733382,
+      "exploratory_ci95_percent": [
+        -5.953034961885181,
+        9.472156762034286
+      ],
+      "session_ratios": [
+        0.9675580267011714,
+        1.0818974794713776,
+        1.0190537286003112,
+        0.9936574832724232
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "overflow",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 0.9909187660308627,
+      "change_percent": -0.908123396913729,
+      "exploratory_ci95_percent": [
+        -3.843271456792135,
+        2.116618956197488
+      ],
+      "session_ratios": [
+        1.0047638420019374,
+        1.0043756229344007,
+        0.9899412589477404,
+        0.9651229123509731
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "overlap",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 0.9968673434865958,
+      "change_percent": -0.313265651340425,
+      "exploratory_ci95_percent": [
+        -4.265497834064124,
+        3.802127553509682
+      ],
+      "session_ratios": [
+        1.0245108733889277,
+        1.012505865876898,
+        0.9720905684667983,
+        0.9793290269082309
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "repeat",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0091976188148062,
+      "change_percent": 0.9197618814806213,
+      "exploratory_ci95_percent": [
+        -1.6757898782714817,
+        3.583830733098621
+      ],
+      "session_ratios": [
+        1.0117347510589287,
+        1.0236420372003852,
+        0.9857919035410367,
+        1.016026047139499
+      ]
+    },
+    {
+      "comparison": "aa",
+      "case": "single",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0446901223112814,
+      "change_percent": 4.469012231128144,
+      "exploratory_ci95_percent": [
+        -0.04993209154249401,
+        9.192267148265815
+      ],
+      "session_ratios": [
+        1.0618340779460382,
+        1.0371621603424233,
+        1.0730358005970226,
+        1.0079347509567929
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "barrier",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 0.6914988671894782,
+      "change_percent": -30.85011328105218,
+      "exploratory_ci95_percent": [
+        -34.434674843589576,
+        -27.069577984456917
+      ],
+      "session_ratios": [
+        0.7154967981024296,
+        0.6624659482360651,
+        0.7033106602726762,
+        0.685878891646035
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "contained",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 0.53910322126628,
+      "change_percent": -46.089677873372004,
+      "exploratory_ci95_percent": [
+        -49.546092676926094,
+        -42.39647658631075
+      ],
+      "session_ratios": [
+        0.5560456454680474,
+        0.5277106190247524,
+        0.5602444130710339,
+        0.5138115890167366
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "disjoint",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0259369981702136,
+      "change_percent": 2.5936998170213466,
+      "exploratory_ci95_percent": [
+        -3.8504030299465244,
+        9.469696949674402
+      ],
+      "session_ratios": [
+        0.9837393667830422,
+        1.0579706769255608,
+        0.9979683762852797,
+        1.0666263453991696
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "overflow",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0240443668044155,
+      "change_percent": 2.4044366804415374,
+      "exploratory_ci95_percent": [
+        0.5018503973883085,
+        4.343040554714722
+      ],
+      "session_ratios": [
+        1.0251091972749464,
+        1.0202937197528907,
+        1.0110156795622534,
+        1.0399725040960324
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "overlap",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0044792219572427,
+      "change_percent": 0.4479221957242619,
+      "exploratory_ci95_percent": [
+        -1.9085800143715015,
+        2.861035908304135
+      ],
+      "session_ratios": [
+        0.988974812513261,
+        1.0249221292332118,
+        1.0043383995028285,
+        1.0000176418611961
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "repeat",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 0.16154754090493595,
+      "change_percent": -83.8452459095064,
+      "exploratory_ci95_percent": [
+        -85.51380536313167,
+        -81.98449722191927
+      ],
+      "session_ratios": [
+        0.1580072961080758,
+        0.16848490317210632,
+        0.17262046559301153,
+        0.14820777536961097
+      ]
+    },
+    {
+      "comparison": "coalesced",
+      "case": "single",
+      "metric": "per_packet_us",
+      "n_sessions": 4,
+      "ratio": 1.0287391808302275,
+      "change_percent": 2.8739180830227453,
+      "exploratory_ci95_percent": [
+        -5.727134415957569,
+        12.259693774958995
+      ],
+      "session_ratios": [
+        1.048515378166641,
+        0.9944510576016347,
+        1.101454920696284,
+        0.975205579360642
+      ]
+    }
+  ]
+}

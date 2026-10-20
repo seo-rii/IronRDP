@@ -22,6 +22,10 @@ default = ["panic_hook"]
 panic_hook = ["iron-remote-desktop/panic_hook"]
 qoi = ["ironrdp/qoi"]
 qoiz = ["ironrdp/qoiz"]
+# Opt in only for measured experiments; ordinary builds coalesce within each PDU.
+experimental-presentation-pacing = []
+# Browser integration fixtures, never enabled by production builds.
+__test-session = []
 
 [dependencies]
 # Protocols
@@ -56,6 +60,8 @@ web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d",
     "HtmlCanvasElement",
     "ImageData",
+    "MessageChannel",
+    "MessagePort",
     "Navigator",
     "Performance",
     "Window",

@@ -1,4 +1,4 @@
-//! Regression tests for bulk-compressed FastPath updates.
+//! Regression tests for FastPath graphics updates and frame acknowledgements.
 //!
 //! A FastPath `Processor` always owns a bulk decompressor: the library builds
 //! one in `ProcessorBuilder::build`. A server can send a compressed FastPath
@@ -8,24 +8,34 @@
 //! uncompressed twin rather than being dropped or aborting the session.
 
 use ironrdp_bulk::{BulkCompressor, CompressionType as BulkCompressionType, flags as bulk_flags};
-use ironrdp_core::{WriteBuf, encode_vec};
+use ironrdp_core::{ReadCursor, WriteBuf, decode, decode_cursor, encode_vec};
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
-use ironrdp_pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdatePdu, Fragmentation, UpdateCode};
-use ironrdp_pdu::geometry::InclusiveRectangle;
+use ironrdp_pdu::fast_path::{
+    EncryptionFlags, FastPathHeader, FastPathUpdate, FastPathUpdatePdu, Fragmentation, UpdateCode,
+};
+use ironrdp_pdu::geometry::{ExclusiveRectangle, InclusiveRectangle};
+use ironrdp_pdu::mcs::McsMessage;
 use ironrdp_pdu::rdp::client_info::CompressionType as PduCompressionType;
-use ironrdp_pdu::rdp::headers::CompressionFlags;
-use ironrdp_session::fast_path::{Processor, ProcessorBuilder};
+use ironrdp_pdu::rdp::headers::{CompressionFlags, ShareControlHeader, ShareControlPdu, ShareDataPdu};
+use ironrdp_pdu::surface_commands::{
+    ExtendedBitmapDataPdu, FrameAction, FrameMarkerPdu, SurfaceBitsPdu, SurfaceCommand,
+};
+use ironrdp_pdu::x224::X224;
+use ironrdp_session::fast_path::{Processor, ProcessorBuilder, UpdateKind};
 use ironrdp_session::image::DecodedImage;
 
 const IMAGE_DIM: u16 = 64;
 const RECT_DIM: u16 = 8;
+const USER_CHANNEL_ID: u16 = 1002;
+const IO_CHANNEL_ID: u16 = 1003;
+const SHARE_ID: u32 = 0x0001_0000;
 
 fn processor() -> Processor {
     ProcessorBuilder {
-        io_channel_id: 0,
-        user_channel_id: 0,
-        share_id: 0,
+        io_channel_id: IO_CHANNEL_ID,
+        user_channel_id: USER_CHANNEL_ID,
+        share_id: SHARE_ID,
         enable_server_pointer: false,
         pointer_software_rendering: false,
     }
@@ -66,6 +76,40 @@ fn fastpath_frame(update_pdu: &[u8]) -> Vec<u8> {
     let mut frame = encode_vec(&header).expect("encode FastPath header");
     frame.extend_from_slice(update_pdu);
     frame
+}
+
+fn surface_commands_frame(commands: Vec<SurfaceCommand<'_>>) -> Vec<u8> {
+    let payload = encode_vec(&FastPathUpdate::SurfaceCommands(commands)).expect("encode surface commands");
+    fastpath_frame(
+        &encode_vec(&FastPathUpdatePdu {
+            fragmentation: Fragmentation::Single,
+            update_code: UpdateCode::SurfaceCommands,
+            compression_flags: None,
+            compression_type: None,
+            data: &payload,
+        })
+        .expect("encode surface commands update"),
+    )
+}
+
+fn assert_frame_ack(output: &[u8], frame_id: u32) {
+    let mut cursor = ReadCursor::new(output);
+    let X224(McsMessage::SendDataRequest(request)) = decode_cursor(&mut cursor).expect("decode acknowledgement") else {
+        panic!("expected a frame acknowledgement in an MCS send data request");
+    };
+    assert!(cursor.is_empty(), "expected exactly one acknowledgement");
+    assert_eq!(request.initiator_id, USER_CHANNEL_ID);
+    assert_eq!(request.channel_id, IO_CHANNEL_ID);
+
+    let header: ShareControlHeader = decode(&request.user_data).expect("decode acknowledgement share header");
+    assert_eq!(header.share_id, SHARE_ID);
+    let ShareControlPdu::Data(data) = header.share_control_pdu else {
+        panic!("expected a share data PDU");
+    };
+    let ShareDataPdu::FrameAcknowledge(ack) = data.share_data_pdu else {
+        panic!("expected a frame acknowledgement PDU");
+    };
+    assert_eq!(ack.frame_id, frame_id);
 }
 
 /// Runs one FastPath frame through a fresh processor and returns the resulting
@@ -215,4 +259,97 @@ fn fragmented_compressed_fastpath_update_decompresses_before_reassembly() {
             .is_empty()
     );
     assert_eq!(image.data(), expected.data());
+}
+
+#[test]
+fn frame_markers_do_not_report_dirty_pixels_and_still_acknowledge_frames() {
+    let frame_id = 0x1234_5678;
+    for actions in [
+        vec![FrameAction::Begin],
+        vec![FrameAction::End],
+        vec![FrameAction::Begin, FrameAction::End],
+    ] {
+        let expects_ack = actions.contains(&FrameAction::End);
+        let frame = surface_commands_frame(
+            actions
+                .into_iter()
+                .map(|frame_action| {
+                    SurfaceCommand::FrameMarker(FrameMarkerPdu {
+                        frame_action,
+                        frame_id: Some(frame_id),
+                    })
+                })
+                .collect(),
+        );
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, IMAGE_DIM, IMAGE_DIM);
+        let before = image.data().to_vec();
+        let mut output = WriteBuf::new();
+        let updates = processor()
+            .process(&mut image, &frame, &mut output, &mut None)
+            .expect("process frame markers");
+
+        assert!(updates.is_empty(), "frame markers alone must not report dirty pixels");
+        assert_eq!(image.data(), before);
+        if expects_ack {
+            assert_frame_ack(output.filled(), frame_id);
+        } else {
+            assert!(output.filled().is_empty(), "begin markers must not acknowledge frames");
+        }
+    }
+}
+
+#[test]
+fn frame_markers_preserve_a_real_top_left_single_pixel_surface_update() {
+    let frame_id = 42;
+    let bits = SurfaceBitsPdu {
+        destination: ExclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+        },
+        extended_bitmap_data: ExtendedBitmapDataPdu {
+            bpp: 32,
+            codec_id: 0,
+            width: 1,
+            height: 1,
+            header: None,
+            data: &[0x33, 0x22, 0x11, 0xff],
+        },
+    };
+    for surface_bits in [
+        SurfaceCommand::SetSurfaceBits(bits.clone()),
+        SurfaceCommand::StreamSurfaceBits(bits),
+    ] {
+        let frame = surface_commands_frame(vec![
+            SurfaceCommand::FrameMarker(FrameMarkerPdu {
+                frame_action: FrameAction::Begin,
+                frame_id: Some(frame_id),
+            }),
+            surface_bits,
+            SurfaceCommand::FrameMarker(FrameMarkerPdu {
+                frame_action: FrameAction::End,
+                frame_id: Some(frame_id),
+            }),
+        ]);
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, IMAGE_DIM, IMAGE_DIM);
+        let mut expected = image.data().to_vec();
+        expected[..4].copy_from_slice(&[0x11, 0x22, 0x33, 0xff]);
+        let mut output = WriteBuf::new();
+        let updates = processor()
+            .process(&mut image, &frame, &mut output, &mut None)
+            .expect("process marked single-pixel surface update");
+
+        assert!(matches!(
+            updates.as_slice(),
+            [UpdateKind::Region(InclusiveRectangle {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            })]
+        ));
+        assert_eq!(image.data(), expected);
+        assert_frame_ack(output.filled(), frame_id);
+    }
 }

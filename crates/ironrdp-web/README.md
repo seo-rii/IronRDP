@@ -86,4 +86,65 @@ requires an unchanged checkout of the given full Git SHA, as in CI; local workin
 tree checks otherwise record their source hashes and whether they match `HEAD`.
 The browser runner currently requires Linux for its `/proc/stat` host counters.
 
+## Canvas presentation
+
+All RDP updates are applied to the framebuffer. By default, Canvas presentation
+coalesces duplicate and contained regions from the same PDU and flushes at its
+end. Disjoint and partially overlapping regions retain their original coverage.
+Regions are clipped before entering the queue; invisible and reversed bounds do
+not create presentation deadlines. The queue holds at most 64 regions and
+flushes before overflowing.
+
+A flush attempts every queued region even if an earlier draw failed, clears the
+scratch buffer after every attempt, and returns the first error. The overflowing
+region is queued even when that capacity flush failed. The remaining graphics
+outputs from the same, already decoded PDU continue through the bounded queue,
+including any further capacity flushes; final cleanup attempts the last batch.
+The first drawing error is retained, with no retries or further non-graphics
+side effects after that failure. Termination and errors perform a best-effort
+final flush; an existing protocol/input error takes precedence over a final
+drawing error.
+
+Reactivation flushes the old framebuffer and cancels its timer before the
+activation exchange. After negotiation, both the Canvas and framebuffer use the
+server's final dimensions, including server-initiated or adjusted sizes. A new
+framebuffer generation clears the Canvas even when its dimensions are unchanged,
+resets pacing, and presents its first visible update immediately. `desktopSize()`
+reports the latest negotiated dimensions. The optional `canvasResizedCallback`
+runs after initial Canvas setup and each negotiated replacement, including an
+equal-size reactivation; it sees the new Canvas and desktop dimensions so the UI
+can recompute its scaling. A thrown callback error terminates the run.
+The activation
+exchange still awaits server traffic without selecting input events, so shutdown
+requested during an unanswered activation exchange remains deferred. This change
+does not add an activation timeout or restructure that protocol state machine.
+
+Cross-PDU pacing and cooperative yielding are **disabled by default**. The Cargo
+feature `experimental-presentation-pacing` explicitly selects a 60 FPS target and
+an 8 ms processing budget for live-session experiments. No JavaScript API changes
+are required. For an experimental WASM build, add
+`--features experimental-presentation-pacing` to `wasm-pack build --target web`,
+using the SIMD flags described above if desired. `PresentationConfig` keeps the
+presentation interval and yield budget as separate internal options.
+
+Only pending visible draws schedule a timer, and later updates do not restart
+its deadline. Lifecycle and capacity flushes can occur before the deadline, so
+60 FPS is a target rather than a strict Canvas-call limit. Yielding uses a reusable
+`MessageChannel` after the configured amount of **post-read processing**: RDP
+decode, output handling and Canvas work after a read has completed. Network waits,
+CPU work performed while polling/framing reads, and activation work are excluded.
+A PDU and a presentation batch remain atomic; the budget does not bound long tasks
+or guarantee input latency. Responses and cursor callbacks remain immediate.
+
+Trace events report presentation reason, framebuffer generation, attempted and
+failed regions, successfully uploaded bytes, batch duration and oldest pending
+age. Optional yield events report the accumulated post-read processing time.
+Timing claims must state whether trace logging was enabled; the recorded synthetic
+benchmarks predate these events and do not measure the full Session loop.
+
+Synthetic checks and archived measurements live in
+[`benches/dirty-region/updates`](benches/dirty-region/updates/README.md). The earlier
+paced unique-tile workload took longer to finish, so pacing remains opt-in and
+this change does not claim to resolve live-video backlog or input latency.
+
 [IronRDP]: https://github.com/Devolutions/IronRDP

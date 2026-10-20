@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::net::{Ipv4Addr, SocketAddrV4};
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -8,11 +8,12 @@ use std::rc::Rc;
 use anyhow::Context as _;
 use base64::Engine as _;
 use futures_channel::mpsc;
+use futures_util::future::{Fuse, FusedFuture as _};
 use futures_util::io::{ReadHalf, WriteHalf};
 use futures_util::{AsyncWriteExt as _, FutureExt as _, StreamExt as _, select};
 use gloo_net::websocket;
 use gloo_net::websocket::futures::WebSocket;
-use gloo_timers::future::IntervalStream;
+use gloo_timers::future::{IntervalStream, TimeoutFuture};
 use iron_remote_desktop::{CursorStyle, DesktopSize, Extension, IronErrorKind};
 use ironrdp::cliprdr::CliprdrClient;
 use ironrdp::cliprdr::backend::ClipboardMessage;
@@ -40,12 +41,15 @@ use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlCanvasElement;
 
-use crate::canvas::Canvas;
+use crate::browser_yield::BrowserYield;
+use crate::canvas::{Canvas, clip_region};
 use crate::clipboard;
 use crate::clipboard::{ClipboardData, FileMetadata, WasmClipboard, WasmClipboardBackend, WasmClipboardBackendMessage};
 use crate::error::IronError;
+use crate::frame_pacing::{FramePacing, PresentationConfig};
 use crate::input::InputTransaction;
 use crate::network_client::WasmNetworkClient;
+use crate::presentation::{PendingRegions, finish_presentation};
 use crate::printer::{JsPrinterStreamCallbacks, WasmPrinter, WasmPrinterBackend, wasm_printer_pair};
 
 const DEFAULT_WIDTH: u16 = 1280;
@@ -74,6 +78,7 @@ struct SessionBuilderInner {
     desktop_size: DesktopSize,
 
     render_canvas: Option<HtmlCanvasElement>,
+    canvas_resized_callback: Option<js_sys::Function>,
     set_cursor_style_callback: Option<js_sys::Function>,
     set_cursor_style_callback_context: Option<JsValue>,
     remote_clipboard_changed_callback: Option<js_sys::Function>,
@@ -121,6 +126,7 @@ impl Default for SessionBuilderInner {
             },
 
             render_canvas: None,
+            canvas_resized_callback: None,
             set_cursor_style_callback: None,
             set_cursor_style_callback_context: None,
             remote_clipboard_changed_callback: None,
@@ -249,8 +255,9 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
         self.clone()
     }
 
-    /// Because the server does not resize the framebuffer in the RDP protocol, this feature is unused in IronRDP.
-    fn canvas_resized_callback(&self, _callback: js_sys::Function) -> Self {
+    /// Optional; called after Canvas initialization and each negotiated framebuffer replacement.
+    fn canvas_resized_callback(&self, callback: js_sys::Function) -> Self {
+        self.0.borrow_mut().canvas_resized_callback = Some(callback);
         self.clone()
     }
 
@@ -356,6 +363,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
             client_name,
             desktop_size,
             render_canvas,
+            canvas_resized_callback,
             set_cursor_style_callback,
             set_cursor_style_callback_context,
             remote_clipboard_changed_callback,
@@ -393,6 +401,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
             desktop_size = inner.desktop_size;
 
             render_canvas = inner.render_canvas.clone().context("render_canvas missing")?;
+            canvas_resized_callback = inner.canvas_resized_callback.clone();
 
             set_cursor_style_callback = inner
                 .set_cursor_style_callback
@@ -545,12 +554,13 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
         spawn_local(writer_task(writer_rx, rdp_writer, outbound_message_size_limit));
 
         Ok(Session {
-            desktop_size: connection_result.desktop_size,
+            desktop_size: Cell::new(connection_result.desktop_size),
             input_database: RefCell::new(ironrdp::input::Database::new()),
             writer_tx,
             input_events_tx,
 
             render_canvas,
+            canvas_resized_callback,
             set_cursor_style_callback,
             set_cursor_style_callback_context,
 
@@ -593,12 +603,13 @@ impl iron_remote_desktop::SessionTerminationInfo for SessionTerminationInfo {
 }
 
 pub(crate) struct Session {
-    desktop_size: connector::DesktopSize,
+    desktop_size: Cell<connector::DesktopSize>,
     input_database: RefCell<ironrdp::input::Database>,
     writer_tx: mpsc::UnboundedSender<Vec<u8>>,
     input_events_tx: mpsc::UnboundedSender<RdpInputEvent>,
 
     render_canvas: HtmlCanvasElement,
+    canvas_resized_callback: Option<js_sys::Function>,
     set_cursor_style_callback: js_sys::Function,
     set_cursor_style_callback_context: JsValue,
 
@@ -608,6 +619,76 @@ pub(crate) struct Session {
     rdp_reader: RefCell<Option<ReadHalf<WebSocket>>>,
     clipboard: RefCell<Option<Option<WasmClipboard>>>,
     printer: RefCell<Option<Option<WasmPrinter>>>,
+}
+
+#[derive(Debug)]
+enum FlushReason {
+    Capacity,
+    Pdu,
+    Deadline,
+    Reactivation,
+    SessionEnd,
+}
+
+struct PresentationControl {
+    pacing: FramePacing,
+    timer: Fuse<TimeoutFuture>,
+    generation: u64,
+    oldest_pending_ms: Option<f64>,
+}
+
+impl PresentationControl {
+    fn new(config: PresentationConfig) -> Self {
+        Self {
+            pacing: FramePacing::new(config.interval.unwrap_or(Duration::ZERO)),
+            timer: Fuse::terminated(),
+            generation: 0,
+            oldest_pending_ms: None,
+        }
+    }
+
+    fn replace_framebuffer(&mut self) {
+        self.timer = Fuse::terminated();
+        self.pacing.reset();
+        self.oldest_pending_ms = None;
+        self.generation = self.generation.saturating_add(1);
+    }
+}
+
+fn present_pending(
+    gui: &Canvas,
+    image: &DecodedImage,
+    pending: &mut PendingRegions,
+    draw_buffer: &mut WriteBuf,
+    control: &mut PresentationControl,
+    performance: &web_sys::Performance,
+    reason: FlushReason,
+) -> anyhow::Result<()> {
+    // Cancel even an already-ready timer after a forced or lifecycle flush.
+    control.timer = Fuse::terminated();
+    let oldest_pending_ms = control.oldest_pending_ms.take();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let started_ms = performance.now();
+    let (stats, result) = pending.flush(draw_buffer, &mut |region, buffer| {
+        gui.draw_image(image, region, buffer).context("draw updated region")
+    });
+    if stats.uploaded_bytes != 0 {
+        control.pacing.presented(started_ms);
+    }
+    trace!(
+        phase = "presentation",
+        ?reason,
+        generation = control.generation,
+        regions = stats.attempted_regions,
+        failed_regions = stats.failed_regions,
+        uploaded_bytes = stats.uploaded_bytes,
+        elapsed_ms = performance.now() - started_ms,
+        oldest_age_ms = ?oldest_pending_ms.map(|queued_ms| started_ms - queued_ms),
+        "Presented pending framebuffer regions"
+    );
+    result
 }
 
 impl Session {
@@ -648,6 +729,15 @@ impl Session {
 
         Ok(())
     }
+
+    fn notify_canvas_resized(&self) -> Result<(), IronError> {
+        if let Some(callback) = &self.canvas_resized_callback {
+            callback
+                .call0(&JsValue::NULL)
+                .map_err(|error| anyhow::anyhow!("canvas resized callback failed: {error:?}"))?;
+        }
+        Ok(())
+    }
 }
 
 impl iron_remote_desktop::Session for Session {
@@ -662,6 +752,9 @@ impl iron_remote_desktop::Session for Session {
             .borrow_mut()
             .take()
             .context("RDP session can be started only once")?;
+        // Only the run that owns the reader may stop the writer. Close on every exit,
+        // including initialization errors and cancellation, while draining queued responses.
+        let _writer_cleanup = CloseWriterOnDrop(&self.writer_tx);
 
         let mut input_events = self
             .input_events_rx
@@ -700,10 +793,23 @@ impl iron_remote_desktop::Session for Session {
             connection_result.desktop_size.height,
         );
 
-        let mut requested_resize = None;
-
         // Reused across frames so per-region extraction doesn't allocate on every draw.
         let mut draw_buffer = WriteBuf::new();
+        let mut pending_regions = PendingRegions::default();
+        let config = if cfg!(feature = "experimental-presentation-pacing") {
+            PresentationConfig::experimental()
+        } else {
+            PresentationConfig::default()
+        };
+        let mut presentation = PresentationControl::new(config);
+        let performance = web_sys::window()
+            .and_then(|window| window.performance())
+            .context("browser performance clock unavailable")?;
+        // This budget starts after a selected read completes: framing/read-poll CPU work
+        // and activation traffic are excluded, as well as time waiting for network data.
+        let mut post_read_work_ms = 0.0;
+        let mut browser_yield = config.yield_budget.map(|_| BrowserYield::new()).transpose()?;
+        self.notify_canvas_resized()?;
 
         // We retain the factory to drive the Deactivation-Reactivation Sequence locally.
         let activation_factory = connection_result.activation_factory;
@@ -723,414 +829,518 @@ impl iron_remote_desktop::Session for Session {
         // Timer interval for driving clipboard lock timeouts (5 second interval)
         let mut cleanup_interval = IntervalStream::new(5_000).fuse();
 
-        let disconnect_reason = 'outer: loop {
-            let outputs = select! {
-                frame = framed.read_pdu().fuse() => {
-                    let (action, payload) = frame.context("read frame")?;
-                    trace!(?action, frame_length = payload.len(), "Frame received");
+        let outcome: Result<_, IronError> = async {
+            let disconnect_reason = 'outer: loop {
+                let mut work_started;
+                let outputs = select! {
+                    frame = framed.read_pdu().fuse() => {
+                        work_started = performance.now();
+                        let (action, payload) = frame.context("read frame")?;
+                        trace!(?action, frame_length = payload.len(), "Frame received");
 
-                    active_stage.process(&mut image, action, &payload)?
-                }
-                input_events = input_events.next() => {
-                    let event = input_events.context("read next input events")?;
+                        active_stage.process(&mut image, action, &payload)?
+                    }
+                    input_events = input_events.next() => {
+                        work_started = performance.now();
+                        let event = input_events.context("read next input events")?;
 
-                    match event {
-                        RdpInputEvent::Cliprdr(message) => {
-                            if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
-                                if let Some(svc_messages) = match message {
-                                    ClipboardMessage::SendInitiateCopy(formats) => Some(
-                                        cliprdr.initiate_copy(&formats)
-                                            .context("cliprdr initiate copy")?
-                                    ),
-                                    ClipboardMessage::SendInitiateFileCopy(files) => Some(
-                                        cliprdr.initiate_file_copy(files)
-                                            .context("cliprdr initiate file copy")?
-                                    ),
-                                    ClipboardMessage::SendFormatData(response) => Some(
-                                        cliprdr.submit_format_data(response)
-                                            .context("cliprdr submit format data")?
-                                    ),
-                                    ClipboardMessage::SendInitiatePaste(format) => Some(
-                                        cliprdr.initiate_paste(format)
-                                            .context("cliprdr initiate paste")?
-                                    ),
-                                    ClipboardMessage::SendFileContentsRequest(request) => Some(
-                                        cliprdr.request_file_contents(request)
-                                            .context("cliprdr request file contents")?
-                                    ),
-                                    ClipboardMessage::SendFileContentsResponse(response) => Some(
-                                        cliprdr.submit_file_contents(response)
-                                            .context("cliprdr submit file contents")?
-                                    ),
-                                    ClipboardMessage::Error(e) => {
-                                        error!(error = %e, "Clipboard backend error");
-                                        None
+                        match event {
+                            RdpInputEvent::Cliprdr(message) => {
+                                if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
+                                    if let Some(svc_messages) = match message {
+                                        ClipboardMessage::SendInitiateCopy(formats) => Some(
+                                            cliprdr.initiate_copy(&formats)
+                                                .context("cliprdr initiate copy")?
+                                        ),
+                                        ClipboardMessage::SendInitiateFileCopy(files) => Some(
+                                            cliprdr.initiate_file_copy(files)
+                                                .context("cliprdr initiate file copy")?
+                                        ),
+                                        ClipboardMessage::SendFormatData(response) => Some(
+                                            cliprdr.submit_format_data(response)
+                                                .context("cliprdr submit format data")?
+                                        ),
+                                        ClipboardMessage::SendInitiatePaste(format) => Some(
+                                            cliprdr.initiate_paste(format)
+                                                .context("cliprdr initiate paste")?
+                                        ),
+                                        ClipboardMessage::SendFileContentsRequest(request) => Some(
+                                            cliprdr.request_file_contents(request)
+                                                .context("cliprdr request file contents")?
+                                        ),
+                                        ClipboardMessage::SendFileContentsResponse(response) => Some(
+                                            cliprdr.submit_file_contents(response)
+                                                .context("cliprdr submit file contents")?
+                                        ),
+                                        ClipboardMessage::Error(e) => {
+                                            error!(error = %e, "Clipboard backend error");
+                                            None
+                                        }
+                                    } {
+                                        let frame = active_stage.process_svc_processor_messages(svc_messages)?;
+                                        // Send the messages to the server
+                                        vec![ActiveStageOutput::ResponseFrame(frame)]
+                                    } else {
+                                        // No messages to send to the server
+                                        Vec::new()
                                     }
-                                } {
-                                    let frame = active_stage.process_svc_processor_messages(svc_messages)?;
-                                    // Send the messages to the server
-                                    vec![ActiveStageOutput::ResponseFrame(frame)]
-                                } else {
-                                    // No messages to send to the server
+                                } else  {
+                                    warn!("Clipboard event received, but Cliprdr is not available");
                                     Vec::new()
                                 }
-                            } else  {
-                                warn!("Clipboard event received, but Cliprdr is not available");
-                                Vec::new()
                             }
-                        }
-                        RdpInputEvent::ClipboardBackend(event) => {
-                            use crate::clipboard::WasmClipboardBackendMessage;
+                            RdpInputEvent::ClipboardBackend(event) => {
+                                use crate::clipboard::WasmClipboardBackendMessage;
 
-                            // Handle messages that need direct cliprdr access
-                            match event {
-                                WasmClipboardBackendMessage::FileContentsRequestSend { stream_id, index, flags, position, size, clip_data_id } => {
-                                    if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
-                                        let request = FileContentsRequest {
-                                            stream_id,
-                                            index,
-                                            flags,
-                                            position,
-                                            requested_size: size,
-                                            data_id: clip_data_id,
-                                        };
-                                        match cliprdr.request_file_contents(request) {
-                                            Ok(svc_messages) => {
-                                                let frame = active_stage.process_svc_processor_messages(svc_messages)?;
-                                                vec![ActiveStageOutput::ResponseFrame(frame)]
-                                            }
-                                            Err(e) => {
-                                                error!(error = %e, "File contents request failed");
-                                                Vec::new()
-                                            }
-                                        }
-                                    } else {
-                                        warn!("Request file contents received, but Cliprdr is not available");
-                                        Vec::new()
-                                    }
-                                }
-                                WasmClipboardBackendMessage::FileContentsResponseSend { stream_id, is_error, data } => {
-                                    if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
-                                        let response = if is_error {
-                                            FileContentsResponse::new_error(stream_id)
-                                        } else {
-                                            FileContentsResponse::new_data_response(stream_id, data)
-                                        };
-                                        match cliprdr.submit_file_contents(response) {
-                                            Ok(svc_messages) => {
-                                                let frame = active_stage.process_svc_processor_messages(svc_messages)?;
-                                                vec![ActiveStageOutput::ResponseFrame(frame)]
-                                            }
-                                            Err(e) => {
-                                                error!(error = %e, "File contents submit failed");
-                                                Vec::new()
-                                            }
-                                        }
-                                    } else {
-                                        warn!("Submit file contents received, but Cliprdr is not available");
-                                        Vec::new()
-                                    }
-                                }
-                                WasmClipboardBackendMessage::InitiateFileCopy { files } => {
-                                    if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
-                                        // Convert FileMetadata to FileDescriptor using the
-                                        // validated conversion that checks name length/emptiness
-                                        // and sets proper file attributes.
-                                        let file_descriptors: Vec<FileDescriptor> = files
-                                            .into_iter()
-                                            .filter_map(|f| match f.to_file_descriptor() {
-                                                Ok(desc) => Some(desc),
-                                                Err(e) => {
-                                                    warn!(error = format!("{e:#}"), "Skipping file with invalid metadata");
-                                                    None
+                                // Handle messages that need direct cliprdr access
+                                match event {
+                                    WasmClipboardBackendMessage::FileContentsRequestSend { stream_id, index, flags, position, size, clip_data_id } => {
+                                        if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
+                                            let request = FileContentsRequest {
+                                                stream_id,
+                                                index,
+                                                flags,
+                                                position,
+                                                requested_size: size,
+                                                data_id: clip_data_id,
+                                            };
+                                            match cliprdr.request_file_contents(request) {
+                                                Ok(svc_messages) => {
+                                                    let frame = active_stage.process_svc_processor_messages(svc_messages)?;
+                                                    vec![ActiveStageOutput::ResponseFrame(frame)]
                                                 }
-                                            })
-                                            .collect();
-
-                                        match cliprdr.initiate_file_copy(file_descriptors) {
-                                            Ok(svc_messages) => {
-                                                let frame = active_stage.process_svc_processor_messages(svc_messages)?;
-                                                vec![ActiveStageOutput::ResponseFrame(frame)]
+                                                Err(e) => {
+                                                    error!(error = %e, "File contents request failed");
+                                                    Vec::new()
+                                                }
                                             }
-                                            Err(e) => {
-                                                error!(error = %e, "Initiate file copy failed");
-                                                Vec::new()
-                                            }
+                                        } else {
+                                            warn!("Request file contents received, but Cliprdr is not available");
+                                            Vec::new()
                                         }
-                                    } else {
-                                        warn!("Initiate file copy received, but Cliprdr is not available");
+                                    }
+                                    WasmClipboardBackendMessage::FileContentsResponseSend { stream_id, is_error, data } => {
+                                        if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
+                                            let response = if is_error {
+                                                FileContentsResponse::new_error(stream_id)
+                                            } else {
+                                                FileContentsResponse::new_data_response(stream_id, data)
+                                            };
+                                            match cliprdr.submit_file_contents(response) {
+                                                Ok(svc_messages) => {
+                                                    let frame = active_stage.process_svc_processor_messages(svc_messages)?;
+                                                    vec![ActiveStageOutput::ResponseFrame(frame)]
+                                                }
+                                                Err(e) => {
+                                                    error!(error = %e, "File contents submit failed");
+                                                    Vec::new()
+                                                }
+                                            }
+                                        } else {
+                                            warn!("Submit file contents received, but Cliprdr is not available");
+                                            Vec::new()
+                                        }
+                                    }
+                                    WasmClipboardBackendMessage::InitiateFileCopy { files } => {
+                                        if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
+                                            // Convert FileMetadata to FileDescriptor using the
+                                            // validated conversion that checks name length/emptiness
+                                            // and sets proper file attributes.
+                                            let file_descriptors: Vec<FileDescriptor> = files
+                                                .into_iter()
+                                                .filter_map(|f| match f.to_file_descriptor() {
+                                                    Ok(desc) => Some(desc),
+                                                    Err(e) => {
+                                                        warn!(error = format!("{e:#}"), "Skipping file with invalid metadata");
+                                                        None
+                                                    }
+                                                })
+                                                .collect();
+
+                                            match cliprdr.initiate_file_copy(file_descriptors) {
+                                                Ok(svc_messages) => {
+                                                    let frame = active_stage.process_svc_processor_messages(svc_messages)?;
+                                                    vec![ActiveStageOutput::ResponseFrame(frame)]
+                                                }
+                                                Err(e) => {
+                                                    error!(error = %e, "Initiate file copy failed");
+                                                    Vec::new()
+                                                }
+                                            }
+                                        } else {
+                                            warn!("Initiate file copy received, but Cliprdr is not available");
+                                            Vec::new()
+                                        }
+                                    }
+                                    // All other messages are forwarded to clipboard backend
+                                    other => {
+                                        if let Some(clipboard) = &mut clipboard {
+                                            clipboard.process_event(other)?;
+                                        }
                                         Vec::new()
                                     }
                                 }
-                                // All other messages are forwarded to clipboard backend
-                                other => {
-                                    if let Some(clipboard) = &mut clipboard {
-                                        clipboard.process_event(other)?;
+                            }
+                            RdpInputEvent::FastPath(events) => {
+                                active_stage.process_fastpath_input(&mut image, &events)
+                                    .context("fast path input events processing")?
+                            }
+                            RdpInputEvent::Resize { width, height, scale_factor, physical_size } => {
+                                debug!(width, height, scale_factor, "Resize event received");
+                                if width == 0 || height == 0 {
+                                    warn!("Resize event ignored: width or height is zero");
+                                    Vec::new()
+                                } else if let Some(response_frame) = active_stage.encode_resize(width, height, scale_factor, physical_size) {
+                                    vec![ActiveStageOutput::ResponseFrame(response_frame?)]
+                                } else {
+                                    debug!("Resize event ignored");
+                                    Vec::new()
+                                }
+                            },
+                            RdpInputEvent::Printer(message) => {
+                                // The printer backend lives inside the Rdpdr SVC
+                                // processor (Send-only); the front-end
+                                // `WasmPrinter` owns the JS callback (!Send) and
+                                // lives here. Just forward the message.
+                                if let Some(ref mut wasm_printer) = wasm_printer {
+                                    wasm_printer.process_message(message);
+                                } else {
+                                    warn!("Printer event received, but no printer is configured");
+                                }
+                                Vec::new()
+                            }
+                            RdpInputEvent::TerminateSession => {
+                                active_stage.graceful_shutdown()
+                                    .context("graceful shutdown")?
+                            }
+                        }
+                    }
+                    _ = cleanup_interval.next() => {
+                        work_started = performance.now();
+                        // Drive clipboard lock timeout cleanup
+                        if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
+                            match cliprdr.drive_timeouts() {
+                                Ok(svc_messages) => {
+                                    let frame = active_stage.process_svc_processor_messages(svc_messages)?;
+                                    if !frame.is_empty() {
+                                        vec![ActiveStageOutput::ResponseFrame(frame)]
+                                    } else {
+                                        Vec::new()
                                     }
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "Clipboard timeout cleanup failed");
                                     Vec::new()
                                 }
                             }
-                        }
-                        RdpInputEvent::FastPath(events) => {
-                            active_stage.process_fastpath_input(&mut image, &events)
-                                .context("fast path input events processing")?
-                        }
-                        RdpInputEvent::Resize { width, height, scale_factor, physical_size } => {
-                            debug!(width, height, scale_factor, "Resize event received");
-                            if width == 0 || height == 0 {
-                                warn!("Resize event ignored: width or height is zero");
-                                Vec::new()
-                            } else if let Some(response_frame) = active_stage.encode_resize(width, height, scale_factor, physical_size) {
-                                let width = NonZeroU32::new(width).expect("width is guaranteed to be non-zero due to the prior check");
-                                let height = NonZeroU32::new(height).expect("height is guaranteed to be non-zero due to the prior check");
-
-                                requested_resize = Some((width, height));
-                                vec![ActiveStageOutput::ResponseFrame(response_frame?)]
-                            } else {
-                                debug!("Resize event ignored");
-                                Vec::new()
-                            }
-                        },
-                        RdpInputEvent::Printer(message) => {
-                            // The printer backend lives inside the Rdpdr SVC
-                            // processor (Send-only); the front-end
-                            // `WasmPrinter` owns the JS callback (!Send) and
-                            // lives here. Just forward the message.
-                            if let Some(ref mut wasm_printer) = wasm_printer {
-                                wasm_printer.process_message(message);
-                            } else {
-                                warn!("Printer event received, but no printer is configured");
-                            }
+                        } else {
                             Vec::new()
                         }
-                        RdpInputEvent::TerminateSession => {
-                            active_stage.graceful_shutdown()
-                                .context("graceful shutdown")?
-                        }
                     }
-                }
-                _ = cleanup_interval.next() => {
-                    // Drive clipboard lock timeout cleanup
-                    if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
-                        match cliprdr.drive_timeouts() {
-                            Ok(svc_messages) => {
-                                let frame = active_stage.process_svc_processor_messages(svc_messages)?;
-                                if !frame.is_empty() {
-                                    vec![ActiveStageOutput::ResponseFrame(frame)]
-                                } else {
-                                    Vec::new()
-                                }
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "Clipboard timeout cleanup failed");
-                                Vec::new()
-                            }
-                        }
-                    } else {
+                    _ = &mut presentation.timer => {
+                        work_started = performance.now();
                         Vec::new()
                     }
-                }
-            };
+                };
 
-            for out in outputs {
-                match out {
-                    ActiveStageOutput::ResponseFrame(frame) => {
-                        self.writer_tx
-                            .unbounded_send(frame)
-                            .context("Send frame to writer task")?;
+                let mut presentation_error = None;
+                for out in outputs {
+                    // After a failed capacity flush, finish presenting this PDU's already
+                    // decoded graphics before returning the first error. Do not perform further
+                    // protocol/callback side effects or enter reactivation while shutting down.
+                    if presentation_error.is_some() && !matches!(out, ActiveStageOutput::GraphicsUpdate(_)) {
+                        continue;
                     }
-                    ActiveStageOutput::GraphicsUpdate(region) => {
-                        gui.draw_image(&image, region, &mut draw_buffer)
-                            .context("draw updated region")?;
-                        draw_buffer.clear();
-                    }
-                    ActiveStageOutput::PointerDefault => {
-                        self.set_cursor_style(CursorStyle::Default)?;
-                    }
-                    ActiveStageOutput::PointerHidden => {
-                        self.set_cursor_style(CursorStyle::Hidden)?;
-                    }
-                    ActiveStageOutput::PointerPosition { .. } => {
-                        // Not applicable for web.
-                    }
-                    ActiveStageOutput::PointerBitmap(pointer) => {
-                        // Maximum allowed cursor size for browsers is 32x32, because bigger sizes
-                        // will cause the following issues:
-                        // - cursors bigger than 128x128 are not supported in browsers.
-                        // - cursors bigger than 32x32 will default to the system cursor if their
-                        //   sprite does not fit in the browser's viewport, introducing an abrupt
-                        //   cursor style change when the cursor is moved to the edge of the
-                        //   browser window.
-                        //
-                        // Therefore, we need to scale the cursor sprite down to 32x32 if it is
-                        // bigger than that.
-                        const MAX_CURSOR_SIZE: u16 = 32;
-                        // INVARIANT: 0 < scale <= 1.0
-                        // INVARIANT: pointer.width * scale <= MAX_CURSOR_SIZE
-                        // INVARIANT: pointer.height * scale <= MAX_CURSOR_SIZE
-                        let scale = if pointer.width >= pointer.height && pointer.width > MAX_CURSOR_SIZE {
-                            Some(f64::from(MAX_CURSOR_SIZE) / f64::from(pointer.width))
-                        } else if pointer.height > MAX_CURSOR_SIZE {
-                            Some(f64::from(MAX_CURSOR_SIZE) / f64::from(pointer.height))
-                        } else {
-                            None
-                        };
-
-                        let (png_width, png_height, hotspot_x, hotspot_y, rgba_buffer) = if let Some(scale) = scale {
-                            // Per invariants: Following conversions will never saturate.
-                            let scaled_width = f64_to_u16_saturating_cast(f64::from(pointer.width) * scale);
-                            let scaled_height = f64_to_u16_saturating_cast(f64::from(pointer.height) * scale);
-                            let hotspot_x = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_x) * scale);
-                            let hotspot_y = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_y) * scale);
-
-                            // Per invariants: scaled_width * scaled_height * 4 <= 32 * 32 * 4 < usize::MAX
-                            #[expect(clippy::arithmetic_side_effects)]
-                            let resized_rgba_buffer_size = usize::from(scaled_width * scaled_height * 4);
-
-                            let mut rgba_resized = vec![0u8; resized_rgba_buffer_size];
-                            let mut resizer = resize::new(
-                                usize::from(pointer.width),
-                                usize::from(pointer.height),
-                                usize::from(scaled_width),
-                                usize::from(scaled_height),
-                                resize::Pixel::RGBA8P,
-                                resize::Type::Lanczos3,
-                            )
-                            .context("failed to initialize cursor resizer")?;
-
-                            resizer
-                                .resize(pointer.bitmap_data.as_pixels(), rgba_resized.as_pixels_mut())
-                                .context("failed to resize cursor")?;
-
-                            (
-                                scaled_width,
-                                scaled_height,
-                                hotspot_x,
-                                hotspot_y,
-                                Cow::Owned(rgba_resized),
-                            )
-                        } else {
-                            (
-                                pointer.width,
-                                pointer.height,
-                                pointer.hotspot_x,
-                                pointer.hotspot_y,
-                                Cow::Borrowed(pointer.bitmap_data.as_slice()),
-                            )
-                        };
-
-                        // Encode PNG.
-                        let mut png_buffer = Vec::new();
-                        {
-                            let mut encoder =
-                                png::Encoder::new(&mut png_buffer, u32::from(png_width), u32::from(png_height));
-
-                            encoder.set_color(png::ColorType::Rgba);
-                            encoder.set_depth(png::BitDepth::Eight);
-                            encoder.set_compression(png::Compression::Fast);
-                            let mut writer = encoder.write_header().context("PNG encoder header write failed")?;
-                            writer
-                                .write_image_data(&rgba_buffer)
-                                .context("failed to encode pointer PNG")?;
+                    // Decode every update into the framebuffer. Responses and callbacks remain
+                    // immediate; only Canvas presentation waits for the next deadline.
+                    match out {
+                        ActiveStageOutput::ResponseFrame(frame) => {
+                            self.writer_tx
+                                .unbounded_send(frame)
+                                .context("Send frame to writer task")?;
                         }
-
-                        // Encode PNG into Base64 data URL.
-                        let mut style = "data:image/png;base64,".to_owned();
-                        base64::engine::general_purpose::STANDARD.encode_string(png_buffer, &mut style);
-
-                        self.set_cursor_style(CursorStyle::Url {
-                            data: style,
-                            hotspot_x,
-                            hotspot_y,
-                        })?;
-                    }
-                    ActiveStageOutput::MonitorLayout(monitors) => {
-                        debug!(
-                            monitor_count = monitors.len(),
-                            "Received remote monitor layout without multi-monitor support"
-                        );
-                    }
-                    ActiveStageOutput::WindowingOrders(_) => {
-                        // Windowing orders are not meaningful to the protocol-agnostic web component.
-                    }
-                    ActiveStageOutput::DeactivateAll => {
-                        // Execute the Deactivation-Reactivation Sequence:
-                        // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dfc234ce-481a-4674-9a5d-2a7bafb14432
-                        debug!("Received Server Deactivate All PDU, executing Deactivation-Reactivation Sequence");
-
-                        // We need to perform resize after receiving the Deactivate All PDU, because there may be frames
-                        // with the previous dimensions arriving between the resize request and this message.
-                        if let Some((width, height)) = requested_resize {
-                            gui.resize(width, height);
-                            requested_resize = None;
+                        ActiveStageOutput::GraphicsUpdate(region) => {
+                            // Reject empty/inverted/offscreen damage before it can create a timer
+                            // or postpone the next real presentation.
+                            if let Some(region) = clip_region(&image, &region) {
+                                let queued = pending_regions.push_or_flush(region, &mut |pending| {
+                                    present_pending(
+                                        &gui,
+                                        &image,
+                                        pending,
+                                        &mut draw_buffer,
+                                        &mut presentation,
+                                        &performance,
+                                        FlushReason::Capacity,
+                                    )
+                                });
+                                // On overflow, push_or_flush preserves the new region even when
+                                // the batch failed. Keep collecting the remaining graphics with
+                                // the same bounded queue; final cleanup attempts the last batch.
+                                if presentation.oldest_pending_ms.is_none() {
+                                    presentation.oldest_pending_ms = Some(performance.now());
+                                }
+                                if let Err(error) = queued {
+                                    presentation_error.get_or_insert(error);
+                                }
+                            }
                         }
+                        ActiveStageOutput::PointerDefault => {
+                            self.set_cursor_style(CursorStyle::Default)?;
+                        }
+                        ActiveStageOutput::PointerHidden => {
+                            self.set_cursor_style(CursorStyle::Hidden)?;
+                        }
+                        ActiveStageOutput::PointerPosition { .. } => {
+                            // Not applicable for web.
+                        }
+                        ActiveStageOutput::PointerBitmap(pointer) => {
+                            // Maximum allowed cursor size for browsers is 32x32, because bigger sizes
+                            // will cause the following issues:
+                            // - cursors bigger than 128x128 are not supported in browsers.
+                            // - cursors bigger than 32x32 will default to the system cursor if their
+                            //   sprite does not fit in the browser's viewport, introducing an abrupt
+                            //   cursor style change when the cursor is moved to the edge of the
+                            //   browser window.
+                            //
+                            // Therefore, we need to scale the cursor sprite down to 32x32 if it is
+                            // bigger than that.
+                            const MAX_CURSOR_SIZE: u16 = 32;
+                            // INVARIANT: 0 < scale <= 1.0
+                            // INVARIANT: pointer.width * scale <= MAX_CURSOR_SIZE
+                            // INVARIANT: pointer.height * scale <= MAX_CURSOR_SIZE
+                            let scale = if pointer.width >= pointer.height && pointer.width > MAX_CURSOR_SIZE {
+                                Some(f64::from(MAX_CURSOR_SIZE) / f64::from(pointer.width))
+                            } else if pointer.height > MAX_CURSOR_SIZE {
+                                Some(f64::from(MAX_CURSOR_SIZE) / f64::from(pointer.height))
+                            } else {
+                                None
+                            };
 
-                        let mut connection_activation = activation_factory.create();
-                        let mut buf = WriteBuf::new();
-                        'activation_seq: loop {
-                            let written =
-                                single_sequence_step_read(&mut framed, &mut connection_activation, &mut buf).await?;
+                            let (png_width, png_height, hotspot_x, hotspot_y, rgba_buffer) = if let Some(scale) = scale {
+                                // Per invariants: Following conversions will never saturate.
+                                // Thin, non-square pointers must retain at least one pixel on
+                                // each axis. Clamp the hotspot to the rounded destination too.
+                                let scaled_width = f64_to_u16_saturating_cast(f64::from(pointer.width) * scale).max(1);
+                                let scaled_height = f64_to_u16_saturating_cast(f64::from(pointer.height) * scale).max(1);
+                                let hotspot_x = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_x) * scale)
+                                    .min(scaled_width.saturating_sub(1));
+                                let hotspot_y = f64_to_u16_saturating_cast(f64::from(pointer.hotspot_y) * scale)
+                                    .min(scaled_height.saturating_sub(1));
 
-                            if written.size().is_some() {
-                                self.writer_tx
-                                    .unbounded_send(buf.filled().to_vec())
-                                    .context("Send frame to writer task")?;
+                                // Per invariants: scaled_width * scaled_height * 4 <= 32 * 32 * 4 < usize::MAX
+                                #[expect(clippy::arithmetic_side_effects)]
+                                let resized_rgba_buffer_size = usize::from(scaled_width * scaled_height * 4);
+
+                                let mut rgba_resized = vec![0u8; resized_rgba_buffer_size];
+                                let mut resizer = resize::new(
+                                    usize::from(pointer.width),
+                                    usize::from(pointer.height),
+                                    usize::from(scaled_width),
+                                    usize::from(scaled_height),
+                                    resize::Pixel::RGBA8P,
+                                    resize::Type::Lanczos3,
+                                )
+                                .context("failed to initialize cursor resizer")?;
+
+                                resizer
+                                    .resize(pointer.bitmap_data.as_pixels(), rgba_resized.as_pixels_mut())
+                                    .context("failed to resize cursor")?;
+
+                                (
+                                    scaled_width,
+                                    scaled_height,
+                                    hotspot_x,
+                                    hotspot_y,
+                                    Cow::Owned(rgba_resized),
+                                )
+                            } else {
+                                (
+                                    pointer.width,
+                                    pointer.height,
+                                    pointer.hotspot_x,
+                                    pointer.hotspot_y,
+                                    Cow::Borrowed(pointer.bitmap_data.as_slice()),
+                                )
+                            };
+
+                            // Encode PNG.
+                            let mut png_buffer = Vec::new();
+                            {
+                                let mut encoder =
+                                    png::Encoder::new(&mut png_buffer, u32::from(png_width), u32::from(png_height));
+
+                                encoder.set_color(png::ColorType::Rgba);
+                                encoder.set_depth(png::BitDepth::Eight);
+                                encoder.set_compression(png::Compression::Fast);
+                                let mut writer = encoder.write_header().context("PNG encoder header write failed")?;
+                                writer
+                                    .write_image_data(&rgba_buffer)
+                                    .context("failed to encode pointer PNG")?;
                             }
 
-                            if let ConnectionActivationState::Finalized {
-                                desktop_size,
-                                share_id,
-                                input_flags: _,
-                                enable_server_pointer,
-                                pointer_software_rendering,
-                                static_channel_chunk_size,
-                                window_support_level,
-                                ..
-                            } = connection_activation.connection_activation_state()
-                            {
-                                debug!("Deactivation-Reactivation Sequence completed");
-                                image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
-                                if !active_stage.reactivate(
-                                    connection_activation.io_channel_id(),
-                                    connection_activation.user_channel_id(),
+                            // Encode PNG into Base64 data URL.
+                            let mut style = "data:image/png;base64,".to_owned();
+                            base64::engine::general_purpose::STANDARD.encode_string(png_buffer, &mut style);
+
+                            self.set_cursor_style(CursorStyle::Url {
+                                data: style,
+                                hotspot_x,
+                                hotspot_y,
+                            })?;
+                        }
+                        ActiveStageOutput::MonitorLayout(monitors) => {
+                            debug!(
+                                monitor_count = monitors.len(),
+                                "Received remote monitor layout without multi-monitor support"
+                            );
+                        }
+                        ActiveStageOutput::WindowingOrders(_) => {
+                            // Windowing orders are not meaningful to the protocol-agnostic web component.
+                        }
+                        ActiveStageOutput::DeactivateAll => {
+                            present_pending(
+                                &gui,
+                                &image,
+                                &mut pending_regions,
+                                &mut draw_buffer,
+                                &mut presentation,
+                                &performance,
+                                FlushReason::Reactivation,
+                            )?;
+                            // Execute the Deactivation-Reactivation Sequence:
+                            // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dfc234ce-481a-4674-9a5d-2a7bafb14432
+                            debug!("Received Server Deactivate All PDU, executing Deactivation-Reactivation Sequence");
+
+                            let mut connection_activation = activation_factory.create();
+                            let mut buf = WriteBuf::new();
+                            'activation_seq: loop {
+                                let written =
+                                    single_sequence_step_read(&mut framed, &mut connection_activation, &mut buf).await?;
+
+                                if written.size().is_some() {
+                                    self.writer_tx
+                                        .unbounded_send(buf.filled().to_vec())
+                                        .context("Send frame to writer task")?;
+                                }
+
+                                if let ConnectionActivationState::Finalized {
+                                    desktop_size,
                                     share_id,
+                                    input_flags: _,
                                     enable_server_pointer,
                                     pointer_software_rendering,
                                     static_channel_chunk_size,
-                                ) {
-                                    return Err(IronError::from(anyhow::anyhow!("invalid static channel chunk size")));
+                                    window_support_level,
+                                    ..
+                                } = connection_activation.connection_activation_state()
+                                {
+                                    debug!("Deactivation-Reactivation Sequence completed");
+                                    let width = NonZeroU32::new(u32::from(desktop_size.width))
+                                        .context("reactivated desktop width is zero")?;
+                                    let height = NonZeroU32::new(u32::from(desktop_size.height))
+                                        .context("reactivated desktop height is zero")?;
+                                    if !active_stage.reactivate(
+                                        connection_activation.io_channel_id(),
+                                        connection_activation.user_channel_id(),
+                                        share_id,
+                                        enable_server_pointer,
+                                        pointer_software_rendering,
+                                        static_channel_chunk_size,
+                                    ) {
+                                        return Err(IronError::from(anyhow::anyhow!("invalid static channel chunk size")));
+                                    }
+                                    active_stage.set_window_support_level(window_support_level);
+                                    // Use the negotiated size, including unsolicited server resizes.
+                                    // Even equal dimensions start a new framebuffer generation, so
+                                    // clear the Canvas instead of retaining pixels from the old image.
+                                    gui.resize(width, height);
+                                    image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
+                                    presentation.replace_framebuffer();
+                                    self.desktop_size.set(desktop_size);
+                                    self.notify_canvas_resized()?;
+                                    post_read_work_ms = 0.0;
+                                    break 'activation_seq;
                                 }
-                                active_stage.set_window_support_level(window_support_level);
-                                break 'activation_seq;
                             }
+                            // Reactivation awaited network traffic; exclude that wait from the work budget.
+                            work_started = performance.now();
                         }
+                        ActiveStageOutput::MultitransportRequest(pdu) => {
+                            debug!(
+                                request_id = pdu.request_id,
+                                requested_protocol = ?pdu.requested_protocol,
+                                "Multitransport request received (UDP transport not implemented)"
+                            );
+                        }
+                        ActiveStageOutput::AutoDetect(request) => {
+                            debug!(?request, "Auto-detect");
+                        }
+                        ActiveStageOutput::AutoReconnectCookie(_) => {
+                            debug!("Server Auto-Reconnect Cookie received (automatic reconnection not implemented)");
+                        }
+                        ActiveStageOutput::AutoReconnectFailed => {
+                            return Err(anyhow::Error::msg("automatic reconnect rejected by server").into());
+                        }
+                        ActiveStageOutput::SaveSessionInfo { logon_complete: true } => {
+                            debug!("RDP login complete");
+                        }
+                        ActiveStageOutput::SaveSessionInfo { logon_complete: false } => {
+                            debug!("RDP session info notification");
+                        }
+                        ActiveStageOutput::Terminate(reason) => break 'outer reason,
                     }
-                    ActiveStageOutput::MultitransportRequest(pdu) => {
-                        debug!(
-                            request_id = pdu.request_id,
-                            requested_protocol = ?pdu.requested_protocol,
-                            "Multitransport request received (UDP transport not implemented)"
-                        );
-                    }
-                    ActiveStageOutput::AutoDetect(request) => {
-                        debug!(?request, "Auto-detect");
-                    }
-                    ActiveStageOutput::AutoReconnectCookie(_) => {
-                        debug!("Server Auto-Reconnect Cookie received (automatic reconnection not implemented)");
-                    }
-                    ActiveStageOutput::AutoReconnectFailed => {
-                        return Err(anyhow::Error::msg("automatic reconnect rejected by server").into());
-                    }
-                    ActiveStageOutput::SaveSessionInfo { logon_complete: true } => {
-                        debug!("RDP login complete");
-                    }
-                    ActiveStageOutput::SaveSessionInfo { logon_complete: false } => {
-                        debug!("RDP session info notification");
-                    }
-                    ActiveStageOutput::Terminate(reason) => break 'outer reason,
                 }
-            }
-        };
+                if let Some(error) = presentation_error {
+                    return Err(error.into());
+                }
+                if !pending_regions.is_empty() {
+                    let delay = presentation.pacing.delay_ms(performance.now());
+                    if delay == 0 {
+                        present_pending(
+                            &gui,
+                            &image,
+                            &mut pending_regions,
+                            &mut draw_buffer,
+                            &mut presentation,
+                            &performance,
+                            if config.interval.is_some() { FlushReason::Deadline } else { FlushReason::Pdu },
+                        )?;
+                    } else if presentation.timer.is_terminated() {
+                        // Do not restart an existing timer as more updates arrive.
+                        presentation.timer = TimeoutFuture::new(delay).fuse();
+                    }
+                }
+
+                // Optional experiment: this measures processing after a selected read, not
+                // total main-thread occupancy. Read/framing polls and activation are excluded.
+                // One PDU and one presentation batch remain atomic, so it is not a hard bound.
+                if let (Some(budget), Some(browser_yield)) = (config.yield_budget, &mut browser_yield) {
+                    post_read_work_ms += performance.now() - work_started;
+                    if post_read_work_ms >= budget.as_secs_f64() * 1_000.0 {
+                        trace!(phase = "post_read_processing", generation = presentation.generation,
+                            post_read_work_ms, "Yielding to browser tasks");
+                        browser_yield.yield_now().await?;
+                        post_read_work_ms = 0.0;
+                    }
+                }
+            };
+            Ok(disconnect_reason)
+        }
+        .await;
+
+        // Flush on both graceful termination and errors, retaining the original error if the
+        // best-effort final presentation also fails. No presentation timer survives the session.
+        let flushed = present_pending(
+            &gui,
+            &image,
+            &mut pending_regions,
+            &mut draw_buffer,
+            &mut presentation,
+            &performance,
+            FlushReason::SessionEnd,
+        );
+        let disconnect_reason = finish_presentation(outcome, flushed.map_err(IronError::from))?;
 
         info!(%disconnect_reason, "RDP session terminated");
 
@@ -1140,9 +1350,10 @@ impl iron_remote_desktop::Session for Session {
     }
 
     fn desktop_size(&self) -> DesktopSize {
+        let desktop_size = self.desktop_size.get();
         DesktopSize {
-            width: self.desktop_size.width,
-            height: self.desktop_size.height,
+            width: desktop_size.width,
+            height: desktop_size.height,
         }
     }
 
@@ -1542,6 +1753,16 @@ fn build_config(
         work_dir: String::new(),
         remote_application_mode: false,
         rail_support_level: ironrdp::pdu::rdp::capability_sets::RailSupportLevel::SUPPORTED,
+    }
+}
+
+struct CloseWriterOnDrop<'a>(&'a mpsc::UnboundedSender<Vec<u8>>);
+
+impl Drop for CloseWriterOnDrop<'_> {
+    fn drop(&mut self) {
+        // Closing the channel wakes the writer and preserves already-enqueued frames.
+        // Once both halves are dropped, WebSocket closes the underlying connection.
+        self.0.close_channel();
     }
 }
 
@@ -2521,3 +2742,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(target_arch = "wasm32", feature = "__test-session"))]
+#[path = "session_fixture.rs"]
+mod session_fixture;

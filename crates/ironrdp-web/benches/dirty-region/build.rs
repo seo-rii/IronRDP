@@ -6,6 +6,9 @@ fn main() {
     for variable in [
         "IRONRDP_BENCH_IMAGE_SOURCE",
         "IRONRDP_BENCH_CANVAS_SOURCE",
+        "IRONRDP_BENCH_PENDING_SOURCE",
+        "IRONRDP_BENCH_PACING_SOURCE",
+        "IRONRDP_BENCH_YIELD_SOURCE",
         "IRONRDP_BENCH_VARIANT",
         "IRONRDP_BENCH_EXPECT_SIMD128",
     ] {
@@ -51,12 +54,42 @@ fn main() {
     fs::write(&destination, instrumented).expect("write benchmark image.rs");
     let canvas_destination = destination.with_file_name("canvas.rs");
     fs::copy(canvas_source, &canvas_destination).expect("copy benchmark canvas.rs");
-    fs::write(
-        destination.with_file_name("module.rs"),
-        format!(
-            "#[path = {destination:?}] mod image;\n\
-             #[cfg(target_arch = \"wasm32\")] #[path = {canvas_destination:?}] mod canvas;"
-        ),
-    )
-    .expect("write benchmark module declaration");
+    let mut modules = format!(
+        "#[path = {destination:?}] mod image;\n\
+         #[cfg(target_arch = \"wasm32\")] #[path = {canvas_destination:?}] mod canvas;\n"
+    );
+    if env::var_os("CARGO_FEATURE_UPDATES").is_some() {
+        for (variable, fallback, name) in [
+            (
+                "IRONRDP_BENCH_PENDING_SOURCE",
+                "../../src/presentation.rs",
+                "pending_regions",
+            ),
+            (
+                "IRONRDP_BENCH_PACING_SOURCE",
+                "../../src/frame_pacing.rs",
+                "frame_pacing",
+            ),
+            (
+                "IRONRDP_BENCH_YIELD_SOURCE",
+                "../../src/browser_yield.rs",
+                "browser_yield",
+            ),
+        ] {
+            let source = env::var_os(variable).map_or_else(|| PathBuf::from(fallback), PathBuf::from);
+            println!("cargo:rerun-if-changed={}", source.display());
+            let target = destination.with_file_name(format!("{name}.rs"));
+            let mut content = fs::read_to_string(source).expect("read production presentation helper");
+            if name == "pending_regions" {
+                content.push_str(
+                    "\npub(crate) fn benchmark_queue_len(pending: &PendingRegions) -> usize { pending.regions.len() }\n",
+                );
+            }
+            fs::write(&target, content).expect("write benchmark presentation helper");
+            modules.push_str(&format!(
+                "#[cfg(target_arch = \"wasm32\")] #[path = {target:?}] mod {name};\n"
+            ));
+        }
+    }
+    fs::write(destination.with_file_name("module.rs"), modules).expect("write benchmark module declaration");
 }

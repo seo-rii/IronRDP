@@ -12,6 +12,16 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 presentation = []
+updates = [
+    "dep:futures-channel",
+    "dep:futures-util",
+    "dep:gloo-timers",
+    "dep:wasm-bindgen-futures",
+    "web-sys/MessageChannel",
+    "web-sys/MessagePort",
+    "web-sys/Performance",
+    "web-sys/Window",
+]
 
 [dependencies]
 ironrdp = { path = "../../../ironrdp", features = ["session", "graphics"] }
@@ -19,7 +29,11 @@ ironrdp-core = { path = "../../../ironrdp-core" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 anyhow = "1"
+futures-channel = { version = "0.3", optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await-macro"], optional = true }
+gloo-timers = { version = "0.4", default-features = false, features = ["futures"], optional = true }
 wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = { version = "=0.4.76", optional = true }
 web-sys = { version = "=0.3.103", features = ["CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData"] }
 
 # Match the web client's production-wasm profile.
