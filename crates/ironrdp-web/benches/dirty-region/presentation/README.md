@@ -155,6 +155,9 @@ before expansion and clipped widths of 1535/1536/1537 pixels crossed with
 34/35-row uploads. Each runs with sparse and initialized canvases in both builds;
 sparse source frames include transparent borders. The CI guard requires every
 case to report unchanged source pixels and the exact upload buffer length.
+The expanded correctness evaluation has a 300-second limit for full RGBA
+readbacks in software Canvas. Preparation and performance evaluations retain
+their separate 120-second limits; this does not change measurement durations.
 The report records the checked commit, source and artifact hashes, compiler,
 browser and observed feature flags. Use `--target-dir` for an isolated reusable
 cache, as for `build.py`. The Web pixel correctness workflow runs this command

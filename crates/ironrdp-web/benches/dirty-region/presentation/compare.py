@@ -21,6 +21,7 @@ from playwright.async_api import async_playwright
 
 
 TIMEOUT_SECONDS = 120
+CORRECTNESS_TIMEOUT_SECONDS = 300
 DEFAULT_CASES = ("1920x1080/1920x1080", "1920x1080/64x720", "1920x1080/32x32", "1920x1080/17x65")
 
 
@@ -100,8 +101,8 @@ def parse_args():
     return args
 
 
-async def evaluate(page, expression, options=None):
-    return await asyncio.wait_for(page.evaluate(expression, options), TIMEOUT_SECONDS)
+async def evaluate(page, expression, options=None, *, timeout=TIMEOUT_SECONDS):
+    return await asyncio.wait_for(page.evaluate(expression, options), timeout)
 
 
 async def session(playwright, args, url, package_root, plan, counts):
@@ -130,8 +131,11 @@ async def session(playwright, args, url, package_root, plan, counts):
                   "gl_renderer": gpu.get("auxAttributes", {}).get("glRenderer"), "prepared": prepared,
                   "host_before": host_snapshot()}
         if plan["kind"] == "correctness":
+            # Expanded 4K and bounds checks include complete RGBA readbacks in
+            # software Canvas. Keep their budget separate from timing sessions.
             result["correctness"] = await evaluate(page, "options => window.checkCorrectness(options)",
-                                                   {"extraFixtures": args.fixtures})
+                                                   {"extraFixtures": args.fixtures},
+                                                   timeout=CORRECTNESS_TIMEOUT_SECONDS)
         else:
             measurements = []
             for fixture in plan["cases"]:
