@@ -81,10 +81,13 @@ Both fixture packages check final RGBA bytes and these production paths:
   draw error, and preservation of the original protocol error when final drawing
   also fails. The default has no pending draw between PDUs.
 - An upload failure attempted once, without a retry in final cleanup.
-- Sixty-five disjoint updates in one PDU, exceeding the 64-region queue while
-  preserving exact coverage. A separate failing-upload case verifies that all
-  64 queued regions are drained once, the overflow region is attempted during
-  final cleanup, and its error does not replace the original failure.
+- Single PDUs with 65, 66 and 130 disjoint updates, crossing one or two
+  64-region capacity flushes while preserving exact coverage. Failure injection
+  at the first, middle and last upload in either batch checks that every region
+  in the current PDU is attempted once. Repeated failures across both batches
+  and final cleanup preserve the first error, including when every upload fails.
+  Full RGBA checks independently mark only successful tiles as visible, and a
+  distinct next PDU buffered in the same WebSocket event must not be drawn.
 - Cancellation of the actual suspended run future, clearing browser timeout and
   clipboard cleanup interval callbacks without a late upload. The paced package
   also cancels a suspended MessageChannel yield and releases its held message

@@ -96,7 +96,9 @@ function installEnvironment() {
         const state = observedCanvases.get(this.canvas);
         if (state) {
             state.attempts.push({x, y, width: image.width, height: image.height, at: clock.now});
-            if (state.failDraw) throw new Error(`session-fixture-draw-failure-${state.attempts.length}`);
+            if (state.failDraw || state.failAttempts.has(state.attempts.length)) {
+                throw new Error(`session-fixture-draw-failure-${state.attempts.length}`);
+            }
         }
         const result = real.putImageData.call(this, image, x, y, ...rest);
         if (state) state.draws++;
@@ -124,6 +126,7 @@ function start(module, width = 64, height = 48) {
     document.querySelector("main").replaceChildren(canvas);
     const fixture = new module.SessionFixture(canvas, "ws://session-fixture.invalid/established", width, height);
     const state = {canvas, fixture, socket: sockets.at(-1), width, height, attempts: [], draws: 0, failDraw: false,
+        failAttempts: new Set(),
         expected: new Uint8ClampedArray(width * height * 4), channelStart: channels.length, outcome: null};
     observedCanvases.set(canvas, state);
     state.done = fixture.run().then(
@@ -255,26 +258,49 @@ window.runSessionChecks = async ({packageRoot, expectedPacing}) => {
             assert(state.attempts.length === 2, "failed upload was retried by final cleanup");
             results.push({case: "draw-error-not-retried", ...result});
         }
-        {
-            const state = start(module, 64, 32); await task();
-            state.socket.push(module.session_fixture_tiles());
-            await task(); clock.advance(20); await task();
-            for (let index = 0; index < 65; index++) paint(state, (index % 16) * 4, Math.floor(index / 16) * 4, 1, 1, 0xCC5533);
-            check(state, "65 disjoint updates in one PDU");
-            assert(state.draws === 65, "overflow changed disjoint update coverage or repeated uploads");
-            state.socket.push(module.session_fixture_disconnect());
-            results.push({case: "region-capacity-overflow", ...await finished(state)});
-        }
-        {
-            const state = start(module, 64, 32); await task();
-            state.failDraw = true;
-            state.socket.push(module.session_fixture_tiles());
-            const result = await finished(state, "session-fixture-draw-failure-1");
-            assert(state.attempts.length === 65 && state.draws === 0,
-                "overflow failure lost the unqueued region or retried an already attempted region");
-            assert(!state.outcome.error.includes("session-fixture-draw-failure-65"), "overflow cleanup replaced the original error");
-            check(state, "overflow failure");
-            results.push({case: "overflow-error-preserves-region", ...result});
+        for (const {name, count, failures} of [
+            {name: "region-capacity-overflow", count: 65, failures: []},
+            {name: "region-capacity-66", count: 66, failures: []},
+            {name: "region-capacity-130", count: 130, failures: []},
+            {name: "overflow-error-preserves-region", count: 65, failures: Array.from({length: 65}, (_, index) => index + 1)},
+            ...[1, 32, 64].map(attempt => ({name: `overflow-66-error-${attempt}`, count: 66, failures: [attempt]})),
+            ...[65, 96, 128].map(attempt => ({name: `overflow-130-error-${attempt}`, count: 130, failures: [attempt]})),
+            {name: "overflow-130-repeated-errors", count: 130, failures: [1, 32, 64, 65, 96, 128, 129, 130]},
+            {name: "overflow-130-all-errors", count: 130, failures: Array.from({length: 130}, (_, index) => index + 1)},
+        ]) {
+            const state = start(module, 64, Math.ceil(count / 16) * 4); await task();
+            state.failAttempts = new Set(failures);
+            const tiles = module.session_fixture_tiles(count);
+            if (failures.length) {
+                // Framed already has another complete PDU buffered. Error cleanup must finish
+                // the current PDU's graphics without progressing to this distinct update.
+                const next = module.session_fixture_bitmap(1, 1, 1, 1, 0x11EECC);
+                const frames = new Uint8Array(tiles.length + next.length);
+                frames.set(tiles); frames.set(next, tiles.length);
+                state.socket.push(frames);
+            } else {
+                state.socket.push(tiles);
+                await task(); clock.advance(20); await task();
+                assert(!state.outcome, `${name}: successful overflow terminated the session`);
+                state.socket.push(module.session_fixture_disconnect());
+            }
+            const result = await finished(state, failures.length ? `session-fixture-draw-failure-${failures[0]}` : null);
+            assert(state.attempts.length === count && state.draws === count - failures.length,
+                `${name}: skipped a dirty region, retried an upload, or consumed the next PDU`);
+            for (let index = 0; index < count; index++) {
+                const x = (index % 16) * 4, y = Math.floor(index / 16) * 4;
+                const attempt = state.attempts[index];
+                assert(attempt.x === x && attempt.y === y && attempt.width === 1 && attempt.height === 1,
+                    `${name}: upload ${index + 1} changed order or coverage`);
+                if (!state.failAttempts.has(index + 1)) paint(state, x, y, 1, 1, 0xCC5533);
+            }
+            if (failures.length) {
+                const errors = [...state.outcome.error.matchAll(/session-fixture-draw-failure-(\d+)/g)];
+                assert(errors.length > 0 && errors.every(match => Number(match[1]) === failures[0]),
+                    `${name}: later drawing replaced the first error`);
+            }
+            check(state, name);
+            results.push({case: name, injected_failures: failures, ...result});
         }
         {
             const state = start(module); await first(module, state); await second(module, state, expectedPacing);

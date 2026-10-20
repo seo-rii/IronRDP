@@ -1023,7 +1023,14 @@ impl iron_remote_desktop::Session for Session {
                     }
                 };
 
+                let mut presentation_error = None;
                 for out in outputs {
+                    // After a failed capacity flush, finish presenting this PDU's already
+                    // decoded graphics before returning the first error. Do not perform further
+                    // protocol/callback side effects or enter reactivation while shutting down.
+                    if presentation_error.is_some() && !matches!(out, ActiveStageOutput::GraphicsUpdate(_)) {
+                        continue;
+                    }
                     // Decode every update into the framebuffer. Responses and callbacks remain
                     // immediate; only Canvas presentation waits for the next deadline.
                     match out {
@@ -1048,11 +1055,14 @@ impl iron_remote_desktop::Session for Session {
                                     )
                                 });
                                 // On overflow, push_or_flush preserves the new region even when
-                                // the batch failed. The final flush below must still attempt it.
+                                // the batch failed. Keep collecting the remaining graphics with
+                                // the same bounded queue; final cleanup attempts the last batch.
                                 if presentation.oldest_pending_ms.is_none() {
                                     presentation.oldest_pending_ms = Some(performance.now());
                                 }
-                                queued?;
+                                if let Err(error) = queued {
+                                    presentation_error.get_or_insert(error);
+                                }
                             }
                         }
                         ActiveStageOutput::PointerDefault => {
@@ -1254,6 +1264,9 @@ impl iron_remote_desktop::Session for Session {
                         }
                         ActiveStageOutput::Terminate(reason) => break 'outer reason,
                     }
+                }
+                if let Some(error) = presentation_error {
+                    return Err(error.into());
                 }
                 if !pending_regions.is_empty() {
                     let delay = presentation.pacing.delay_ms(performance.now());

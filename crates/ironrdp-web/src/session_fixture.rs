@@ -192,9 +192,12 @@ pub fn session_fixture_bitmap(left: u16, top: u16, width: u16, height: u16, colo
 }
 
 #[wasm_bindgen]
-pub fn session_fixture_tiles() -> Result<Vec<u8>, JsValue> {
+pub fn session_fixture_tiles(count: u16) -> Result<Vec<u8>, JsValue> {
+    if !(1..=256).contains(&count) {
+        return Err(JsValue::from_str("fixture tile count must be between 1 and 256"));
+    }
     let mut updates = Vec::new();
-    for index in 0u16..65 {
+    for index in 0..count {
         let left = (index % 16).checked_mul(4).expect("bounded fixture coordinate");
         let top = (index / 16).checked_mul(4).expect("bounded fixture coordinate");
         updates.extend(bitmap_update(left, top, 1, 1, 0x00CC_5533)?);

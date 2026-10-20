@@ -15,7 +15,10 @@ from build import BENCH, HERE, checkout_state, digest, source_hashes, write_json
 
 CASES = {"idle-presentation", "timer-and-server-ready", "termination-flush", "termination-draw-error",
          "protocol-error-preserved", "draw-error-not-retried", "region-capacity-overflow",
-         "overflow-error-preserves-region", "drop-cancels-timers",
+         "region-capacity-66", "region-capacity-130", "overflow-error-preserves-region",
+         "overflow-66-error-1", "overflow-66-error-32", "overflow-66-error-64",
+         "overflow-130-error-65", "overflow-130-error-96", "overflow-130-error-128",
+         "overflow-130-repeated-errors", "overflow-130-all-errors", "drop-cancels-timers",
          "activation-wait-cancellation", "reactivation-size-and-generation"}
 
 

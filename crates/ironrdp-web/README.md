@@ -97,9 +97,13 @@ flushes before overflowing.
 
 A flush attempts every queued region even if an earlier draw failed, clears the
 scratch buffer after every attempt, and returns the first error. The overflowing
-65th region is queued even when that capacity flush failed, so the final flush
-can still attempt it. Termination and errors perform a best-effort final flush;
-an existing protocol/input error takes precedence over a final drawing error.
+region is queued even when that capacity flush failed. The remaining graphics
+outputs from the same, already decoded PDU continue through the bounded queue,
+including any further capacity flushes; final cleanup attempts the last batch.
+The first drawing error is retained, with no retries or further non-graphics
+side effects after that failure. Termination and errors perform a best-effort
+final flush; an existing protocol/input error takes precedence over a final
+drawing error.
 
 Reactivation flushes the old framebuffer and cancels its timer before the
 activation exchange. After negotiation, both the Canvas and framebuffer use the
