@@ -1,7 +1,7 @@
 # WASM bindings for web
 
-This crate is part of the [IronRDP] project. See the [web client](../../web-client)
-for the browser components and demonstration application.
+See the [web client](../../web-client) for the browser components and
+demonstration application.
 
 ## Build and SIMD
 
@@ -76,5 +76,13 @@ belonging to this physical benchmark workspace. `--expected-head` additionally
 requires an unchanged checkout of the given full Git SHA, as in CI; local working
 tree checks otherwise record their source hashes and whether they match `HEAD`.
 The browser runner currently requires Linux for its `/proc/stat` host counters.
+
+## 🛠️ Build with `wasm-pack build`
+
+```
+wasm-pack build
+```
+
+This crate is part of the [IronRDP] project.
 
 [IronRDP]: https://github.com/Devolutions/IronRDP
