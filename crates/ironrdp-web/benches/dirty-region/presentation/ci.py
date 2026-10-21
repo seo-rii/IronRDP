@@ -19,6 +19,7 @@ CASES = (
     "1920x1080/1920x1080", "1920x1080/64x720", "1920x1080/32x32", "1920x1080/17x65",
     "1920x1080/1535x720", "1920x1080/1536x720", "1920x1080/1537x720",
     "1920x1080/1800x720", "1920x1080/1919x720", "1920x1080/1920x720",
+    "1920x1080/1535x34", "1920x1080/1535x35",
     "1920x1080/1536x34", "1920x1080/1536x35", "1920x1080/1919x1080",
     "1920x1080/1537x34", "1920x1080/1537x35",
     "1920x1080/1920x34", "1920x1080/1920x35", "1919x1080/1919x35",
@@ -30,6 +31,8 @@ BOUNDS_CASES = (
     "right-overflow", "bottom-overflow", "both-overflow", "outside-right", "outside-bottom",
     "outside-both", "inverted-horizontal", "inverted-vertical", "maximum-coordinates", "maximum-outside",
     "last-pixel", "maximum-right", "clipped-whole-rows", "clipped-below-cap", "clipped-full-width-fusion",
+    "outside-before-expansion",
+    *(f"clipped-cap-{width}-height-{height}" for width in (1535, 1536, 1537) for height in (34, 35)),
 )
 
 

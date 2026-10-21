@@ -106,7 +106,18 @@ function checkBounds() {
         {name: "clipped-below-cap", region: [20, 3, 120, 73], upload: [20, 3, 95, 73]},
         {name: "clipped-full-width-fusion", imageWidth: 1920, imageHeight: 40,
             region: [0, 5, 65535, 65535], upload: [0, 5, 1919, 39]},
+        {name: "outside-before-expansion", imageWidth: 64, imageHeight: 128,
+            region: [64, 0, 127, 127], upload: null},
     ];
+    // Clipping leaves each side of the 80% cap, crossed with the 256 KiB fusion
+    // threshold. A selection performed before clipping would expand all six.
+    for (const [width, left, expanded] of [[1535, 385, false], [1536, 384, true], [1537, 383, true]]) {
+        for (const height of [34, 35]) {
+            fixtures.push({name: `clipped-cap-${width}-height-${height}`, imageWidth: 1920, imageHeight: 96,
+                region: [left, 5, 65535, 5 + height - 1],
+                upload: [expanded ? 0 : left, 5, 1919, 5 + height - 1]});
+        }
+    }
     const results = [];
     current.modules.forEach((module, index) => {
         // Historical packages retain their original behavior. ci.py separately
@@ -119,6 +130,11 @@ function checkBounds() {
                 const bench = new module.PresentationBenchmark(canvas,
                     imageWidth, imageHeight, 0, 0, imageWidth, imageHeight);
                 try {
+                    if (!initialized) {
+                        // Exercise untouched framebuffer alpha as well as a transparent canvas.
+                        bench.clear_source();
+                        bench.paint(1, 1, imageWidth - 2, imageHeight - 2, 31);
+                    }
                     const before = [bench.source_pixels(0), bench.source_pixels(1)];
                     if (initialized) bench.draw_batch(0, 0, imageWidth, imageHeight, 2);
                     const expected = initialized ? new Uint8ClampedArray(bench.expected_pixels(1)) :

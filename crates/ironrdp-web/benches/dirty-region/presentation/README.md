@@ -4,6 +4,8 @@ See [RESULTS.md](RESULTS.md) for the implementation comparison and the final
 full-screen confirmation using the repository's Rust 1.94.1.
 See [LARGE_COPY_RESULTS.md](LARGE_COPY_RESULTS.md) for the subsequent direct
 comparison of conditional full-width copy/alpha fusion against that SIMD baseline.
+See [EXPANDED_ROWS_RESULTS.md](EXPANDED_ROWS_RESULTS.md) for fusion applied after
+selecting the upload rectangle, compared directly with `a5682c16`.
 
 This experiment compares three independently compiled implementations:
 
@@ -120,6 +122,46 @@ SIMD alpha pass. These test RGB values, complete and incomplete pixels, surround
 bytes and unchanged source data. `prepare` in direct mode still measures raw
 extraction; it excludes the optimized presentation path and is not a selection
 metric. Select using complete `draw` and, for full frames, `draw_js` measurements.
+
+To compare the current expanded-row implementation with its PR #1 base, pass
+`--baseline 890620691d36b22dd54ac77e7b255018cc3f683d` to the direct build command.
+The retained historical measurements used `a5682c16` and the source hashes in
+their manifest; they do not describe the latest head after clipping and copy-path
+changes. New measurements require fresh builds of both selected revisions.
+The case matrix in [EXPANDED_ROWS_RESULTS.md](EXPANDED_ROWS_RESULTS.md) includes
+the 80% width boundary, selected uploads immediately below and above 256 KiB,
+odd framebuffer widths, and 4K. Previously optimized full frames and compact
+regions serve as controls. Do not combine improvement percentages measured
+against different baselines.
+
+## Current-source correctness in CI
+
+From the parent `dirty-region` directory, run:
+
+```sh
+python3 presentation/ci.py --expected-head "$(git rev-parse HEAD)" \
+    --wasm-bindgen /path/to/wasm-bindgen \
+    --output output/pixel-correctness
+```
+
+This requires a clean tracked checkout and a new output directory. It builds the
+current production files twice, with `simd128` explicitly disabled and enabled,
+and calls the real `Canvas::draw_image` and copy/alpha helpers in both modules.
+The build guard and the loaded modules must agree on `[false, true]` SIMD support.
+No historical revision or source adapter is used. It checks sparse initialization,
+resize, boundary cases and all RGBA bytes, without running performance timings.
+The current bounds matrix includes updates completely outside the framebuffer
+before expansion and clipped widths of 1535/1536/1537 pixels crossed with
+34/35-row uploads. Each runs with sparse and initialized canvases in both builds;
+sparse source frames include transparent borders. The CI guard requires every
+case to report unchanged source pixels and the exact upload buffer length.
+The expanded correctness evaluation has a 300-second limit for full RGBA
+readbacks in software Canvas. Preparation and performance evaluations retain
+their separate 120-second limits; this does not change measurement durations.
+The report records the checked commit, source and artifact hashes, compiler,
+browser and observed feature flags. Use `--target-dir` for an isolated reusable
+cache, as for `build.py`. The Web pixel correctness workflow runs this command
+for the exact requested head commit and preserves the reports as CI artifacts.
 
 ## Measurements and controls
 

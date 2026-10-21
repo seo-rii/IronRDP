@@ -2,6 +2,7 @@ use core::num::NonZeroU32;
 
 #[cfg(target_arch = "wasm32")]
 use anyhow::anyhow;
+use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp::session::image::DecodedImage;
 use ironrdp_core::WriteBuf;
@@ -11,7 +12,7 @@ use wasm_bindgen::{Clamped, JsCast as _};
 use web_sys::ImageData;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-use crate::image::extract_partial_image;
+use crate::image::{copy_selected_region, select_upload_region};
 
 /// Web render surface: blits each dirty region to the canvas with `put_image_data`.
 pub(crate) struct Canvas {
@@ -48,22 +49,26 @@ impl Canvas {
 
     /// Prepares and uploads a framebuffer update without modifying the source pixels.
     /// Clips the update to the framebuffer; regions with no overlap are ignored.
-    /// The caller must clear `buffer` before each update.
+    /// The framebuffer must use `RgbA32`, and the caller must clear `buffer` before each update.
     pub(crate) fn draw_image(
         &self,
         image: &DecodedImage,
         region: InclusiveRectangle,
         buffer: &mut WriteBuf,
     ) -> anyhow::Result<()> {
+        debug_assert_eq!(image.pixel_format(), PixelFormat::RgbA32);
+        debug_assert_eq!(buffer.filled_len(), 0);
         let Some(region) = clip_region(image, &region) else {
             return Ok(());
         };
 
+        // Fusion depends on the rows actually uploaded, including capped whole-row expansion.
+        let region = select_upload_region(image, region);
         if prefer_fused_copy(image, &region) {
             copy_opaque_rows(image, &region, buffer);
             self.blit(buffer.filled(), region)
         } else {
-            let region = extract_partial_image(image, region, buffer);
+            let region = copy_selected_region(image, region, buffer);
             self.draw(buffer.filled_mut(), region)
         }
     }
@@ -108,6 +113,7 @@ pub(crate) fn clip_region(image: &DecodedImage, region: &InclusiveRectangle) -> 
     reason = "the source image bounds the row offsets and length"
 )]
 pub(crate) fn copy_opaque_rows(image: &DecodedImage, region: &InclusiveRectangle, buffer: &mut WriteBuf) {
+    debug_assert_eq!(image.pixel_format(), PixelFormat::RgbA32);
     debug_assert_eq!(region.left, 0);
     debug_assert_eq!(region.width(), image.width());
     let stride = usize::from(image.width()) * 4;
@@ -118,9 +124,9 @@ pub(crate) fn copy_opaque_rows(image: &DecodedImage, region: &InclusiveRectangle
 }
 
 #[expect(clippy::arithmetic_side_effects, reason = "two u16 dimensions fit in a wasm32 usize")]
-fn prefer_fused_copy(image: &DecodedImage, region: &InclusiveRectangle) -> bool {
-    // Avoid the per-row SIMD overhead observed for narrow updates. Small full-width updates
-    // also retain the existing path; this threshold is checked by the browser benchmark.
+pub(crate) fn prefer_fused_copy(image: &DecodedImage, region: &InclusiveRectangle) -> bool {
+    // Avoid the per-row SIMD overhead observed for narrow uploads. Small full-width uploads
+    // also retain the separate copy/alpha path; the threshold applies after selecting coverage.
     const MIN_FUSED_PIXELS: usize = 256 * 1024 / 4;
     region.left == 0
         && region.width() == image.width()

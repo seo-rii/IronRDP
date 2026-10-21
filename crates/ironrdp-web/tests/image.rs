@@ -72,8 +72,8 @@ fn assert_pixels(data: &[u8], image_width: u16, region: &InclusiveRectangle) {
 }
 
 fn assert_extraction(image: &DecodedImage, region: InclusiveRectangle, whole_rows: bool) {
-    let mut buffer = WriteBuf::new();
-    let actual = image::extract_partial_image(image, region.clone(), &mut buffer);
+    // Expected coverage comes from the existing policy's explicit test cases, independently
+    // of the selector now shared by raw extraction and Canvas preparation.
     let expected = if whole_rows {
         InclusiveRectangle {
             left: 0,
@@ -83,8 +83,37 @@ fn assert_extraction(image: &DecodedImage, region: InclusiveRectangle, whole_row
     } else {
         region.clone()
     };
+    let selected = image::select_upload_region(image, region.clone());
+    assert_eq!(selected, expected, "unexpected selection for {region:?}");
+    assert_eq!(image::select_upload_region(image, selected.clone()), selected);
+    assert!(selected.left <= region.left && region.right <= selected.right);
+    assert_eq!((selected.top, selected.bottom), (region.top, region.bottom));
+    let mut buffer = WriteBuf::new();
+    let actual = image::extract_partial_image(image, region.clone(), &mut buffer);
     assert_eq!(actual, expected, "unexpected extraction for {region:?}");
     assert_pixels(buffer.filled(), image.width(), &actual);
+}
+
+#[test]
+fn selected_copy_keeps_exact_coverage_without_reapplying_the_upload_policy() {
+    let source = patterned_image(1920, 96);
+    let original = source.data().to_vec();
+    let mut buffer = WriteBuf::new();
+    for region in [
+        rectangle(37, 11, 1536, 35),
+        rectangle(37, 11, 1535, 34),
+        rectangle(0, 11, 1920, 35),
+    ] {
+        // The first region would be expanded by the selection policy. A caller that
+        // already chose this coverage must receive only these pixels from the copy step.
+        buffer.clear();
+        buffer.write_slice(&[11, 23, 47]);
+        let copied = image::copy_selected_region(&source, region.clone(), &mut buffer);
+        assert_eq!(copied, region);
+        assert_eq!(&buffer.filled()[..3], &[11, 23, 47]);
+        assert_pixels(&buffer.filled()[3..], source.width(), &region);
+        assert_eq!(source.data(), original);
+    }
 }
 
 #[test]
@@ -95,6 +124,8 @@ fn dirty_regions_extract_the_selected_rectangle_and_pixels() {
         (rectangle(19, 23, 512, 720), false),
         (rectangle(71, 19, 1280, 720), false),
         (rectangle(71, 19, 1536, 720), true),
+        (rectangle(37, 19, 1800, 720), true),
+        (rectangle(1, 19, 1919, 720), true),
         (rectangle(0, 0, 1920, 1080), true),
         (rectangle(15, 22, 32, 32), false),
         (rectangle(1300, 37, 600, 1), false),
@@ -112,9 +143,26 @@ fn dirty_regions_extract_the_selected_rectangle_and_pixels() {
 
 #[test]
 fn whole_rows_are_limited_to_a_quarter_extra_pixels() {
+    // Rounded-up boundaries are listed rather than calculated with the production condition.
+    for (image_width, minimum_width) in [(1919, 1536), (1920, 1536), (1921, 1537), (3840, 3072), (3841, 3073)] {
+        let image = patterned_image(image_width, 96);
+        for (width, whole_rows) in [
+            (minimum_width - 1, false),
+            (minimum_width, true),
+            (minimum_width + 1, true),
+        ] {
+            assert_extraction(&image, rectangle(37, 11, width, 65), whole_rows);
+        }
+    }
+
     let image = patterned_image(1920, 96);
-    for (width, whole_rows) in [(1535, false), (1536, true), (1537, true)] {
-        assert_extraction(&image, rectangle(37, 11, width, 65), whole_rows);
+    // Expansion crosses the Canvas fusion threshold between 34 and 35 rows. It must
+    // preserve this raw extraction API's selection and pixel bytes on either side.
+    for height in [34, 35] {
+        assert_extraction(&image, rectangle(37, 11, 1535, height), false);
+        for width in [1536, 1537, 1800, 1919] {
+            assert_extraction(&image, rectangle(1, 11, width, height), true);
+        }
     }
 }
 
@@ -188,5 +236,6 @@ fn extraction_preserves_transparent_pixels_from_a_new_framebuffer() {
             usize::from(result.width()) * usize::from(result.height()) * 4
         );
         assert!(buffer.filled().iter().all(|&byte| byte == 0));
+        assert!(image.data().iter().all(|&byte| byte == 0));
     }
 }
