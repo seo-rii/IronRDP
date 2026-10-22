@@ -1,0 +1,4 @@
+/pkg/
+/target/
+/output/
+__pycache__/

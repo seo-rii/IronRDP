@@ -1,0 +1,57 @@
+{
+  "baseline": "ea9c379b9e0b5bcf59cc531f4b97316c24040cf7",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+  "wasm_bindgen": "wasm-bindgen 0.2.126",
+  "rustflags": "-Ctarget-feature=+simd128,+bulk-memory --cfg getrandom_backend=\"wasm_js\" -Copt-level=s -Ccodegen-units=1 -Cllvm-args=-enable-dfa-jump-thread",
+  "profile": "release: opt-level=s, lto=true; no wasm-opt",
+  "harness_sha256": {
+    "Cargo.toml": "e97763dc49fb511fb63ea67e9d51a51eb96870e1e18011ccdd780f1f9301b823",
+    "Cargo.lock": "50a2bf709c1d494f1ef583b5958a1e878f2dbb4bb9a072c2cbf83da634869780",
+    "build.rs": "472537e2c58e61432bac4539043d7f99cb6a1af97515f0ea618f35bd2a0b8edb",
+    "policy.rs": "746f0a0e37a9165c03f4908d3c1ec6aa39c40caf5a3e66156ce98b2d3b319d5b",
+    "src/lib.rs": "e3ae3d90c39a2359177996b79aaa0e8aa0cf8dd72cf3f1ea350f5f1d16789b2d",
+    "src/presentation.rs": "426451389bd0682715acf85f21772521990a58dc7b7e4074922ccdd993b85262",
+    "presentation/build.py": "1129a7bcb6463e29ba530591d1551ff51c074273601e233b09dfca2d371c2847"
+  },
+  "variants": {
+    "scalar": {
+      "sources": {
+        "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+        "canvas.rs": "63aeb6af765b7081d47b0591749df583040e36be0a9a7633f95d12f127146735"
+      },
+      "artifacts": {
+        "ironrdp_web_dirty_region_bench.d.ts": "a783335adc67668aaaadb44aea4bf0f58dcc3d615eaacf398c1a869db574baff",
+        "ironrdp_web_dirty_region_bench.js": "c4a557a080bf7a0660227a55eb86961abe3e37df3641310ced158379d65f14cb",
+        "ironrdp_web_dirty_region_bench_bg.wasm": "bb598f2e792c99804e357026372683a38d0c4889bf6d36b05dc643a449cae923",
+        "ironrdp_web_dirty_region_bench_bg.wasm.d.ts": "0651b9e158f9f58a2cc2e183e0ff0b48a1e89ec218e2019b812a5c51c29e1e1e"
+      },
+      "patch_sha256": null
+    },
+    "simd": {
+      "sources": {
+        "image.rs": "37e38799170227e3fe4719e494efd138d23cd5789c2c9c7955f1126b72d6aa69",
+        "canvas.rs": "4497ddbab1479e04343dc5c254712fb4496383d4192a0fcd58783311650f2475"
+      },
+      "artifacts": {
+        "ironrdp_web_dirty_region_bench.d.ts": "a783335adc67668aaaadb44aea4bf0f58dcc3d615eaacf398c1a869db574baff",
+        "ironrdp_web_dirty_region_bench.js": "c4a557a080bf7a0660227a55eb86961abe3e37df3641310ced158379d65f14cb",
+        "ironrdp_web_dirty_region_bench_bg.wasm": "8df4e6d2056cde2363fe0e2a4d7a424ea337a96ffac68ff55174ea5a9a4b7d66",
+        "ironrdp_web_dirty_region_bench_bg.wasm.d.ts": "0651b9e158f9f58a2cc2e183e0ff0b48a1e89ec218e2019b812a5c51c29e1e1e"
+      },
+      "patch_sha256": "48d1d4845dc14b3791ac7e48539baa85926349977e049fa5c0f6eabebb5ad62f"
+    },
+    "fused": {
+      "sources": {
+        "image.rs": "50292c16db7c042a0c62aea171ca1821ea76f35758489be014a2dc2c524f5d03",
+        "canvas.rs": "742404b99044c019a6929ee28cb1656127c4edef50c2555e908d7dbb07c5393a"
+      },
+      "artifacts": {
+        "ironrdp_web_dirty_region_bench.d.ts": "a783335adc67668aaaadb44aea4bf0f58dcc3d615eaacf398c1a869db574baff",
+        "ironrdp_web_dirty_region_bench.js": "c4a557a080bf7a0660227a55eb86961abe3e37df3641310ced158379d65f14cb",
+        "ironrdp_web_dirty_region_bench_bg.wasm": "d6eaf2a6c08515e1b2152718bfa81c82923381fab26b2256cdb79ff7126d5b66",
+        "ironrdp_web_dirty_region_bench_bg.wasm.d.ts": "0651b9e158f9f58a2cc2e183e0ff0b48a1e89ec218e2019b812a5c51c29e1e1e"
+      },
+      "patch_sha256": "eee1bf8677d1ff423c3d197683e73be6d27159cde5274b440a277f5ebf3430d3"
+    }
+  }
+}
